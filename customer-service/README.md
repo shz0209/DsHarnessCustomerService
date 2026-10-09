@@ -34,7 +34,7 @@ pnpm dsh --profile web --patch customer-service/app.overlay.yml
 
 账号在首次启动时播种，已存在的行不会被覆盖；删掉 `customer-service/data/customer-service.sqlite` 即可重新播种。
 
-## 当前状态：登录与身份（issue #3）
+## 当前状态：登录、身份与侧栏（issue #3、#4）
 
 ```
 app.overlay.yml                   覆盖层：SQLite 后端、Customer 域、下面三个插件
@@ -42,7 +42,7 @@ plugins/shared/vocabulary.js      等级取值与中文名（白银 / 黄金 / �
 plugins/store/index.js            Customer 表、演示账号播种、customerStore 服务
 plugins/store/passwords.js        scrypt 加盐哈希与定时安全比较
 plugins/auth/index.js             裸 HTTP 路由、会话绑定、注入模型的客户身份
-plugins/ui/                       浏览器半边：登录页与账号角标
+plugins/ui/                       浏览器半边：登录页与侧栏接管
   index.js                        宿主半边（空 apply，只为让 Loader 有一行）
   client.js                       手写的闭包工厂，无构建步骤
 ```
@@ -62,23 +62,30 @@ plugins/ui/                       浏览器半边：登录页与账号角标
 
 登录建立的会话挂在 `config.workspacePath` 指向的工作区上（覆盖层里解析为 `customer-service/`）。这一步不能省：只带工作目录、不挂工作区的会话，浏览器会渲染成「选择一个工作区」落地页，客户于是在另一个未绑定的会话里提问，`customerIdentity` 永远匹配不上，模型什么也收不到。
 
+## 侧栏接管（issue #4）
+
+左栏整列由本项目的浏览器插件接管：账号名、VIP 等级徽章（中文）、底部「退出登录」。原生侧栏的会话列表、工作区、设置入口都不再出现，而对话界面本身不动——订单卡片（issue #5）之后要渲染在它里面。未登录时这个占用者不渲染任何内容。
+
+机制是槽位系统的遮盖（[ADR-0007](docs/adr/0007-sidebar-takeover-by-lower-slot-priority.md)）：`sidebar` 是 `kind: 'single'` 的根槽位，一格只渲染一个条目，**最低 `priority` 的存活条目渲染**；原生占用者 `ui-sidebar` 用默认的 0 注册，本项目注册 `priority: -1` 把它遮盖掉。列宽、折叠、拖拽仍归 `AppFrame`——折叠成 56px 轨道时本项目只留等级徽章与「退出」。
+
 ## 校验
 
-打开 Web UI，未登录时整个界面被登录页盖住：看不到也碰不到对话界面，此时服务端不会创建任何会话。用小字列出的任一账号登录，页面刷新后进入新会话，右下角出现账号与等级角标。
+打开 Web UI，未登录时整个界面被登录页盖住：看不到也碰不到对话界面，此时服务端不会创建任何会话，左栏也是空的。用小字列出的任一账号登录，页面刷新后进入新会话，左栏换成客服侧栏。
 
 - **密码不是明文**：`sqlite3 customer-service/data/customer-service.sqlite 'select value from u_customer_customers'` 只会看到 `scrypt$…`（表名来自存储域的 KV 形式，一行一个账号，`value` 是 JSON）。
 - **错误提示**：故意输错账号或密码，登录页显示「账号或密码错误」——账号错与密码错是同一句，不透露是哪一项。
 - **身份注入模型**：登录后问客服「我是谁」，回答里会带上当前账号名与 VIP 等级（如「黑金」）。注进模型的那一行是 `当前客户：blackgold（VIP 等级：黑金，管理员）。`，未绑定的会话不注入任何内容。
-- **退出登录**：点「退出登录」后回到登录页，客户端记录的当前会话被清掉；换另一个账号登录会落到一个全新的空会话，**对话区**里看不到上一个客户说过的话。
+- **侧栏接管**：用 `blackgold` 登录后，左栏是「共享充电宝智能客服 / blackgold / 黑金 / 管理员 / 退出登录」，没有会话列表、工作区与设置入口；中间的对话界面照常可用。按 ⌥⌘B 折叠左栏，轨道里只留「黑金」「退出」这类内容——轨道放不下账号名，等级徽章与退出是它仅有的两样。
+- **退出登录**：点侧栏底部的「退出登录」后回到登录页，客户端记录的当前会话被清掉；换另一个账号登录会落到一个全新的空会话，**对话区**里看不到上一个客户说过的话。
 - **关掉浏览器再打开需要重新登录**：登录 cookie 不设 `Max-Age`，是会话 cookie——演示不做「记住登录」。
-
-已知缺口：原生侧栏的会话列表还没被接管（issue #1 落地顺序的第 ⑥ 步，不在本期），所以上一个客户的会话标题仍会列在左栏、也点得开。本期用的是 issue #1 给的办法——退出时清掉「当前会话」＋每次登录新建会话——它保证的是**登录后落在哪个会话**，不是**侧栏里还剩哪些会话**。
 
 自动化验收在 `tests/auth.spec.ts`：用真实的 web server、storage 与 prompt 插件驱动这四条路由，覆盖登录、退出、绑定、身份注入与播种幂等。跑法是从仓库根目录执行
 
 ```sh
 pnpm exec vitest run --config customer-service/vitest.config.ts
 ```
+
+浏览器半边（登录页、侧栏）**没有自动化覆盖**：仓库的浏览器用例都住在 `apps/web/tests/`，而本目录不改动本目录之外的文件（ADR-0003），因此与 #3 一样靠上面几条手动走查。
 
 ## 附：issue #2 的 spike 骨架
 
