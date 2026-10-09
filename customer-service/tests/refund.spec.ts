@@ -1,10 +1,10 @@
 /**
  * Issue #8 acceptance: 退款 — the fixed rules that decide it, the one-time 凭证
- * 人工还宝 introduced (ADR-0002), and the action that marks the Order.
+ * 人工还宝 introduced (ADR-0002), and the action that moves an Order to 已退款.
  *
  * The seam is the composed application (`composition.ts`): the real store, tool
  * registry, prompt registry and web server, driven through the tool executor.
- * The refund rules read no clock — the tier and the status decide — so the
+ * The refund rules read no clock — the status and the tier decide — so the
  * clock is fixed only where a recorded 退款时间 has to be compared.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -45,6 +45,9 @@ const ALLOWED_BLACK_GOLD = '用户为黑金会员，允许退款'
 
 /** The refusal a power bank that is still out gets, whatever the tier. */
 const STILL_OUT = '不允许退款，该订单仍在进行中'
+
+/** The refusal an Order whose money is already back gets, whatever the tier. */
+const ALREADY_REFUNDED = '不允许退款，该订单已退款'
 
 /** The refusal a tier below 铂金 gets, once the Order is back. */
 const NOT_QUALIFIED = '非铂金/黑金会员，不允许退款'
@@ -174,6 +177,27 @@ describe('the fixed rules for 退款', () => {
     expect(outcomeValue<Verdict>(await run(app, caller, 'validate_refund', { orderId: SILVER_RETURNED })))
       .toEqual({ verdict: 'denied', text: NOT_QUALIFIED })
   })
+
+  it('refuses an Order whose money is already back, whatever the tier', async () => {
+    const app = await boot()
+    const caller = await callerFor(app, 'platinum')
+    vi.setSystemTime(NOW)
+    // The first refund is allowed and moves the Order to 已退款.
+    expect(outcomeValue<Verdict>(await run(app, caller, 'validate_refund', { orderId: PLATINUM_RETURNED })).verdict)
+      .toBe('allowed')
+    expect((await run(app, caller, 'refund', { orderId: PLATINUM_RETURNED })).isError).toBe(false)
+
+    // The second is refused for the money, not for the Order or the tier: the
+    // status is read before either, so a 铂金 Customer is told the truth.
+    const again = await run(app, caller, 'validate_refund', { orderId: PLATINUM_RETURNED })
+    expect(outcomeValue<Verdict>(again)).toEqual({ verdict: 'denied', text: ALREADY_REFUNDED })
+    expect(outcomeText(again)).toContain(ALREADY_REFUNDED)
+    // A refused validation issues nothing, so a refund cannot follow it.
+    const refused = await run(app, caller, 'refund', { orderId: PLATINUM_RETURNED })
+    expect(refused.isError).toBe(true)
+    expect(outcomeText(refused)).toContain('凭证')
+    expect(app.order(PLATINUM, PLATINUM_RETURNED)?.refundedAt).toBe(REFUNDED_AT)
+  })
 })
 
 describe('the grant a passing 校验 issues', () => {
@@ -226,15 +250,15 @@ describe('the grant a passing 校验 issues', () => {
     vi.setSystemTime(NOW)
     await run(app, caller, 'validate_refund', { orderId: PLATINUM_RETURNED })
 
-    // The back office (issue #9) rewrites the same Order row in the meantime.
-    const byTheBackOffice = '2026-10-08T20:00:00.000+08:00'
-    await app.markReturned(PLATINUM, PLATINUM_RETURNED, byTheBackOffice)
+    // The panel's row is written from another Session in the meantime.
+    const fromThePanel = '2026-10-08T20:00:00.000+08:00'
+    await app.markReturned(PLATINUM, PLATINUM_RETURNED, fromThePanel)
 
     const stale = await run(app, caller, 'refund', { orderId: PLATINUM_RETURNED })
     expect(stale.isError).toBe(true)
     expect(outcomeText(stale)).toContain('变更')
-    // The stale grant wrote nothing, so the back office's record stands.
-    expect(app.order(PLATINUM, PLATINUM_RETURNED)).toMatchObject({ returnedAt: byTheBackOffice })
+    // The stale grant wrote nothing, so the panel's record stands.
+    expect(app.order(PLATINUM, PLATINUM_RETURNED)).toMatchObject({ returnedAt: fromThePanel })
     expect(app.order(PLATINUM, PLATINUM_RETURNED)?.refundedAt).toBeUndefined()
   })
 
@@ -285,7 +309,7 @@ describe('the grant a passing 校验 issues', () => {
 })
 
 describe('refund', () => {
-  it('marks the whole Order amount refunded, and leaves the status alone', async () => {
+  it('refunds the whole Order amount and moves it to 已退款', async () => {
     const app = await boot()
     const { sessionId } = await login(app.port, platinum)
     const caller = await app.agent(sessionId)
@@ -300,7 +324,7 @@ describe('refund', () => {
         location: seededOrder(PLATINUM_RETURNED).location,
         rentedAt: seededOrder(PLATINUM_RETURNED).rentedAt,
         amountCents: seededOrder(PLATINUM_RETURNED).amountCents,
-        status: 'returned',
+        status: 'refunded',
         refundedAt: REFUNDED_AT,
       },
     })
@@ -310,11 +334,12 @@ describe('refund', () => {
     expect(said).toContain('退款时间 2026-10-10 09:30')
     expect(said).not.toContain(PLATINUM)
 
-    // 物 and 钱 are two things: the money is back, the rental is still 已归还.
-    expect(app.order(PLATINUM, PLATINUM_RETURNED)).toMatchObject({ status: 'returned', refundedAt: REFUNDED_AT })
+    // 已退款 is the last status of the lifecycle, and 归还时间 stays: the money
+    // went back after the power bank did.
+    expect(app.order(PLATINUM, PLATINUM_RETURNED)).toMatchObject({ status: 'refunded', refundedAt: REFUNDED_AT })
   })
 
-  it('shows the mark on the card, and on every later query about that Order', async () => {
+  it('shows the status on the card, and on every later query about that Order', async () => {
     const app = await boot()
     const { cookie, sessionId } = await login(app.port, platinum)
     const caller = await app.agent(sessionId)
@@ -329,8 +354,8 @@ describe('refund', () => {
       location: seededOrder(PLATINUM_RETURNED).location,
       rentedAt: seededOrder(PLATINUM_RETURNED).rentedAt,
       amountCents: seededOrder(PLATINUM_RETURNED).amountCents,
-      status: 'returned',
-      statusLabel: '已归还',
+      status: 'refunded',
+      statusLabel: '已退款',
       refundedAt: REFUNDED_AT,
     }])
     await call(app.port, '/order-question/answer', {
@@ -338,10 +363,11 @@ describe('refund', () => {
       cookie,
       body: { callId: 'call-1', orderId: PLATINUM_RETURNED },
     })
-    expect(outcomeOrder(await running)).toMatchObject({ status: 'returned', refundedAt: REFUNDED_AT })
+    expect(outcomeOrder(await running)).toMatchObject({ status: 'refunded', refundedAt: REFUNDED_AT })
+    expect(outcomeText(await running)).toContain('状态 已退款')
   })
 
-  it('keeps the mark when the store is opened again', async () => {
+  it('keeps the status when the store is opened again', async () => {
     const first = await boot()
     const caller = await callerFor(first, 'platinum')
     vi.setSystemTime(NOW)
@@ -349,12 +375,12 @@ describe('refund', () => {
     await run(first, caller, 'refund', { orderId: PLATINUM_RETURNED })
     await first.dispose()
 
-    // The mark is a stored field, not process state: a restarted demo shows the
-    // same 已退款 badge, and the row the grant's change reading compares stays
-    // the one the Order really has.
+    // The status and the stamp are stored fields, not process state: a
+    // restarted demo shows the same 已退款, and the row the grant's change
+    // reading compares stays the one the Order really has.
     const second = await boot({ storageRoot: first.storageRoot })
     expect(second.order(PLATINUM, PLATINUM_RETURNED)).toMatchObject({
-      status: 'returned',
+      status: 'refunded',
       refundedAt: REFUNDED_AT,
     })
   })

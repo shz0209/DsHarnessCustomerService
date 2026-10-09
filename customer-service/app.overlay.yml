@@ -32,5 +32,9 @@
         workspacePath: !!js process.getBuiltinModule('node:path').resolve('customer-service')
     - id: customer-service-tools
       name: ./plugins/tools/index.js
+    # The routes behind the panel. They register no tool: what the model may
+    # call stays the five of ADR-0005, whatever the account.
+    - id: customer-service-orders
+      name: ./plugins/orders/index.js
     - id: customer-service-ui
       name: ./plugins/ui/index.js

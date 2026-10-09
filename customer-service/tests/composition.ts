@@ -1,8 +1,8 @@
 /**
  * The composed application this directory's tool suites drive: the shipped
  * tool registry, web server, storage hub, JSON backend, domain form, and
- * prompt registry, plus this directory's `store`, `auth`, and `tools` plugins,
- * behind a real listening web server.
+ * prompt registry, plus this directory's `store`, `auth`, `tools`, and
+ * `orders` plugins, behind a real listening web server.
  *
  * Only `connection`, `sessionController`, `workspaceRegistry`, and `agents` are
  * stood in for — Agent lifecycle is the harness's, and the minter below gives
@@ -27,8 +27,9 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import * as authPlugin from '../plugins/auth/index.js'
+import * as ordersPlugin from '../plugins/orders/index.js'
 import * as storePlugin from '../plugins/store/index.js'
-import { DEMO_ACCOUNTS } from '../plugins/store/index.js'
+import { DEMO_ACCOUNTS, ORDERS_TABLE, customerDomain } from '../plugins/store/index.js'
 import * as toolsPlugin from '../plugins/tools/index.js'
 import { agentDouble, asAgent, bodyOf, call, cookieValue, registerCleanup, requireService } from './support.js'
 import type { StoredOrder } from './support.js'
@@ -66,7 +67,7 @@ export interface Booted {
   searchOrders(customerId: string, filter?: Record<string, string | undefined>): StoredOrder[]
   /** Read one stored Order row, as the store's own scoped lookup returns it. */
   order(customerId: string, orderId: string): StoredOrder | undefined
-  /** Close one Order through the store, as the back office does. */
+  /** Close one Order through the store, as the panel's route does. */
   markReturned(customerId: string, orderId: string, returnedAt: string): Promise<StoredOrder | undefined>
   /** Mark one Order refunded through the store, as the refund tool does. */
   markRefunded(customerId: string, orderId: string, refundedAt: string): Promise<StoredOrder | undefined>
@@ -195,6 +196,7 @@ export async function boot(options: BootOptions = {}): Promise<Booted> {
   const liveAgent = await mint('session-live')
   if (options.livePresentation !== undefined) liveAgent.ctx!.tools.presentAs(options.livePresentation)
   await ctx.plugin(toolsPlugin)
+  await ctx.plugin(ordersPlugin)
 
   const webServer = requireService(ctx, 'webServer')
   const systemPrompt = requireService(ctx, 'systemPrompt')
@@ -243,6 +245,26 @@ export async function boot(options: BootOptions = {}): Promise<Booted> {
     },
     dispose,
   }
+}
+
+/**
+ * Write one Order row straight into the table, the way a database written by an
+ * earlier build of these plugins holds it.
+ *
+ * Nothing in the current plugins can produce a row that no longer matches what
+ * they write, so a test that needs one — a refund recorded before 已退款 was a
+ * status — puts it there itself, through the same storage the composition opens.
+ * @param storageRoot - the backend root a composition was given.
+ * @param order - the row to store, exactly as it is to be read back.
+ */
+export async function writeStoredOrder(storageRoot: string, order: Record<string, unknown>): Promise<void> {
+  const ctx = new Context()
+  await ctx.plugin(Storage)
+  await ctx.plugin(storageJson, { root: join(storageRoot, 'kv') })
+  await ctx.plugin(storageDomain, { backend: 'json' })
+  const domain = await ctx.storageDomain.open(customerDomain)
+  await domain.table(ORDERS_TABLE).put(String(order.orderId), order)
+  await ctx.fiber.dispose()
 }
 
 /**

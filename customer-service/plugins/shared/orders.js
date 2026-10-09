@@ -19,9 +19,9 @@ export const ORDER_SCHEMA = {
     location: { type: 'string', description: '租借地点。' },
     rentedAt: { type: 'string', description: '租借时间，ISO-8601。' },
     amountCents: { type: 'integer', description: '金额，单位分。' },
-    status: { type: 'string', enum: [...ORDER_STATUSES], description: '订单状态。' },
+    status: { type: 'string', enum: [...ORDER_STATUSES], description: '订单状态：进行中、已归还或已退款。' },
     returnedAt: { type: 'string', description: '归还时间，ISO-8601；尚未归还时没有这个字段。' },
-    refundedAt: { type: 'string', description: '退款时间，ISO-8601；尚未退款时没有这个字段。退款不改变订单状态。' },
+    refundedAt: { type: 'string', description: '退款时间，ISO-8601；尚未退款时没有这个字段。' },
   },
 }
 
@@ -47,11 +47,21 @@ export function publicOrder(order) {
 }
 
 /**
+ * One Order as the browser's cards show it: the fields the model may see, plus
+ * the Chinese status label the model-facing schema has no room for (its fields
+ * are closed).
+ * @param order - a stored Order row or its projection.
+ * @returns the Order the cards render.
+ */
+export function cardOrder(order) {
+  return { ...publicOrder(order), statusLabel: ORDER_STATUS_LABELS[order.status] }
+}
+
+/**
  * One Order as a line of model-facing text.
  *
- * 已退款 is a mark beside the status rather than a status of its own, and it is
- * said here so a model reading any later query about the Order knows the money
- * is already back.
+ * The status is the whole of it — 已退款 is a status, so a model reading any
+ * later query about the Order reads the money being back from that word.
  * @param order - a stored Order row or its projection.
  * @returns the Order in one sentence, with its Chinese status.
  */
@@ -59,7 +69,6 @@ export function orderLine(order) {
   const amount = (order.amountCents / 100).toFixed(2)
   return `订单号 ${order.orderId}，租借地点 ${order.location}，租借时间 ${order.rentedAt}，`
     + `金额 ¥${amount}，状态 ${ORDER_STATUS_LABELS[order.status]}`
-    + (order.refundedAt === undefined ? '' : '，已退款')
 }
 
 /**

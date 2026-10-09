@@ -45,6 +45,9 @@ const TOO_OLD = '不允许人工还宝，借出时间已超过两小时'
 /** The verdict text it pins for an Order that is already closed. */
 const ALREADY_RETURNED = '不允许人工还宝，该订单已归还'
 
+/** The refusal a refunded Order gets: it is past 已归还, and says so. */
+const ALREADY_REFUNDED = '不允许人工还宝，该订单已退款'
+
 /** The instant {@link WINDOW_CLOSES} reads as, in the zone the demo speaks. */
 const CLOSES_AT = '2026-10-08T21:24:00.000+08:00'
 
@@ -60,6 +63,12 @@ interface ReturnedOrder {
 }
 
 const silver = demoAccount('silver')
+
+/** The account whose Orders can be refunded, for the status that follows one. */
+const platinum = demoAccount('platinum')
+
+/** Platinum's returned Order, which a refund moves on to 已退款. */
+const PLATINUM_RETURNED = 'ord-platinum-2'
 
 /** Both tools this issue adds; each is driven against the same Order. */
 const NEW_TOOLS = ['validate_manual_return', 'manual_return']
@@ -138,6 +147,26 @@ describe('the fixed rules for 人工还宝', () => {
     const refused = await run(app, caller, 'manual_return', { orderId: RETURNED_ORDER })
     expect(refused.isError).toBe(true)
     expect(app.order(CUSTOMER, RETURNED_ORDER)?.returnedAt).toBeUndefined()
+  })
+
+  it('refuses an Order that has been refunded, whose power bank is back too', async () => {
+    const app = await boot()
+    // 铂金 may refund, and a refund moves the Order to 已退款 — the far end of
+    // the lifecycle. The power bank is back there as much as at 已归还, so the
+    // time rule never comes up, and the refusal names 已退款 rather than a
+    // status the Order no longer has.
+    const { sessionId } = await login(app.port, platinum)
+    const caller = await app.agent(sessionId)
+    vi.setSystemTime(WINDOW_CLOSES)
+    await run(app, caller, 'validate_refund', { orderId: PLATINUM_RETURNED })
+    await run(app, caller, 'refund', { orderId: PLATINUM_RETURNED })
+    expect(app.order('cust-platinum', PLATINUM_RETURNED)?.status).toBe('refunded')
+
+    const verdict = await run(app, caller, 'validate_manual_return', { orderId: PLATINUM_RETURNED })
+    expect(outcomeValue<Verdict>(verdict)).toEqual({ verdict: 'denied', text: ALREADY_REFUNDED })
+    const refused = await run(app, caller, 'manual_return', { orderId: PLATINUM_RETURNED })
+    expect(refused.isError).toBe(true)
+    expect(app.order('cust-platinum', PLATINUM_RETURNED)?.returnedAt).toBeUndefined()
   })
 })
 
@@ -275,7 +304,7 @@ describe('the grant a passing 校验 issues', () => {
     vi.setSystemTime(WINDOW_CLOSES)
     await run(app, caller, 'validate_manual_return', { orderId: ORDER })
 
-    // The Order is closed by someone else in the meantime — the back office
+    // The Order is closed by someone else in the meantime — the panel
     // (issue #9) closes Orders through this same write.
     const byTheBackOffice = '2026-10-08T20:00:00.000+08:00'
     await app.markReturned(CUSTOMER, ORDER, byTheBackOffice)
@@ -283,7 +312,7 @@ describe('the grant a passing 校验 issues', () => {
     const stale = await run(app, caller, 'manual_return', { orderId: ORDER })
     expect(stale.isError).toBe(true)
     expect(outcomeText(stale)).toContain('变更')
-    // The stale grant wrote nothing, so the back office's record stands.
+    // The stale grant wrote nothing, so the panel's record stands.
     expect(app.order(CUSTOMER, ORDER)?.returnedAt).toBe(byTheBackOffice)
   })
 })

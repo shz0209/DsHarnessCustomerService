@@ -14,6 +14,9 @@ export const ROUTE_PREFIX = '/customer-service'
 /** Largest accepted request body, in bytes. Every body this demo accepts is tiny. */
 const MAX_BODY_BYTES = 4096
 
+/** What every route answers a request with no live login. */
+const NOT_LOGGED_IN = '请先登录'
+
 /**
  * Register one exact route behind the request-trust fence.
  *
@@ -48,6 +51,27 @@ export function registerJsonRoute(ctx, route) {
       }
     },
   }), `${route.label}: ${route.method} ${full}`)
+}
+
+/**
+ * Resolve the Customer a request is logged in as, refusing one that is not.
+ *
+ * Every client-facing route that needs an identity starts here: the login
+ * cookie is the only identity a route may trust (ADR-0004), and a request
+ * without a live login gets the same 401 wherever it arrives.
+ * @param ctx - plugin context carrying the login binding.
+ * @param req - the incoming request.
+ * @param res - the response to write the refusal to.
+ * @returns the login Session id and its Customer row, or `undefined` when the
+ *   request was refused and answered.
+ */
+export function requireLogin(ctx, req, res) {
+  const login = ctx.customerIdentity.forRequest(req)
+  if (login === undefined) {
+    sendJson(res, 401, { error: NOT_LOGGED_IN })
+    return undefined
+  }
+  return login
 }
 
 /**

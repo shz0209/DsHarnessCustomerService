@@ -6,13 +6,15 @@
  * This plugin owns the database. It is the only place that opens a storage
  * domain, so the table layout and the credentials never leak past the service
  * surface. Every read and write of an Order is scoped by `customerId`, which
- * the caller takes from the login binding rather than from a tool argument
- * (ADR-0004).
+ * the caller takes from the login binding rather than from a tool argument or a
+ * request field (ADR-0004) — that scoping is the whole isolation guarantee, and
+ * it holds for the panel's routes exactly as it does for the Agent's tools.
  *
  * Imports `zod` because a storage-domain table schema must be a zod schema.
  * The repository root has `zod`, so Node resolves it from here even though this
  * directory is not a workspace member (ADR-0006).
  */
+import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { hashPassword, verifyPassword } from './passwords.js'
 import { ORDER_STATUSES, TIERS } from '../shared/vocabulary.js'
@@ -46,8 +48,8 @@ const customerRecord = z.object({
  * rental time the Customer experienced rather than one the browser guesses.
  * `returnedAt` is the same kind of stamp, written when an Order is closed;
  * seeded Orders that arrive 已归还 carry none, because no return was recorded
- * for them. `refundedAt` is the refund mark, written beside the status rather
- * than into it.
+ * for them. `refundedAt` is the same again, written when the money went back
+ * and the status became 已退款.
  */
 const orderRecord = z.object({
   orderId: z.string().min(1),
@@ -136,6 +138,7 @@ export async function apply(ctx) {
     isAdmin: account.isAdmin,
   }))
   await seed(orders, DEMO_ORDERS, 'orderId', order => ({ ...order }))
+  await carryRefundMarksForward(orders)
 
   ctx.provide('customerStore', {
     /**
@@ -218,8 +221,7 @@ export async function apply(ctx) {
      *   Order.
      */
     findOrder(customerId, orderId) {
-      const order = orders.get(orderId)
-      return order?.customerId === customerId ? order : undefined
+      return ownedOrder(orders, customerId, orderId)
     },
 
     /**
@@ -227,8 +229,8 @@ export async function apply(ctx) {
      *
      * The write is unconditional — the business rules that decide whether an
      * Order may be closed belong to the tool that owns them (the 人工还宝 tool
-     * refuses a 凭证 earned before the Order changed), and the back office
-     * (issue #9) closes Orders through this same call.
+     * refuses a 凭证 earned before the Order changed). The panel closes Orders
+     * through {@link closeOpenOrder}, which does carry a rule of its own.
      * @param customerId - the Customer whose Order may be written.
      * @param orderId - the Order number.
      * @param returnedAt - the return time, an offset-carrying ISO-8601 stamp.
@@ -236,11 +238,9 @@ export async function apply(ctx) {
      *   Customer owns no such Order and nothing was written.
      */
     async markReturned(customerId, orderId, returnedAt) {
-      const order = orders.get(orderId)
-      if (order === undefined || order.customerId !== customerId) return undefined
-      // Spread first so the stored field order is preserved: a rewrite that only
-      // adds the return time is what the grant's change reading expects.
-      const updated = { ...order, status: 'returned', returnedAt }
+      const order = ownedOrder(orders, customerId, orderId)
+      if (order === undefined) return undefined
+      const updated = closedOrder(order, returnedAt)
       await orders.put(orderId, updated)
       return updated
     },
@@ -249,10 +249,10 @@ export async function apply(ctx) {
      * Mark one of a Customer's own Orders refunded, recording when.
      *
      * The whole Order amount is what a refund returns, so the amount is not a
-     * parameter: the mark says the money went back, and the row already says how
-     * much. The status is deliberately left alone — 物 and 钱 are two things, so
-     * a refunded rental stays 已归还 (ADR-0009's reading covers this new field
-     * like any other).
+     * parameter: the row already says how much. The write is unconditional, like
+     * {@link markReturned} — the 退款 rules that decide whether this may happen
+     * belong to the tool that owns them (ADR-0009's change reading covers the
+     * status and the new stamp like any other field).
      * @param customerId - the Customer whose Order may be written.
      * @param orderId - the Order number.
      * @param refundedAt - the refund time, an offset-carrying ISO-8601 stamp.
@@ -260,13 +260,129 @@ export async function apply(ctx) {
      *   Customer owns no such Order and nothing was written.
      */
     async markRefunded(customerId, orderId, refundedAt) {
-      const order = orders.get(orderId)
-      if (order === undefined || order.customerId !== customerId) return undefined
-      const updated = { ...order, refundedAt }
+      const order = ownedOrder(orders, customerId, orderId)
+      if (order === undefined) return undefined
+      const updated = refundedOrder(order, refundedAt)
       await orders.put(orderId, updated)
       return updated
     },
+
+    // What the panel (issue #9) does to a Customer's own Orders. These are
+    // scoped like the ones above — the `customerId` comes from the login
+    // binding, never from the request — because the panel is part of the same
+    // surface: a Customer prepares and inspects their own demo data, and no
+    // tool and no route reaches anyone else's row.
+
+    /**
+     * Create an Order under a Customer, minting its number.
+     *
+     * The status is not a parameter: an Order the panel creates is one the
+     * power bank is still out with, which is the state the two-hour rule is
+     * demonstrated from. The number is minted here rather than accepted from
+     * the caller so the table's key space stays this plugin's to keep unique.
+     * @param input - the owning Customer, the rental location, the amount in
+     *   integer cents, and the rental time as an offset-carrying ISO-8601 stamp.
+     * @returns the stored Order, or `undefined` when no such Customer exists
+     *   and nothing was written.
+     */
+    async createOrder(input) {
+      if (customers.get(input.customerId) === undefined) return undefined
+      const order = {
+        orderId: mintOrderId(orders),
+        customerId: input.customerId,
+        location: input.location,
+        amountCents: input.amountCents,
+        rentedAt: input.rentedAt,
+        status: 'in_progress',
+      }
+      await orders.put(order.orderId, order)
+      return order
+    },
+
+    /**
+     * Close one of a Customer's own Orders that is still 进行中.
+     *
+     * Unlike {@link markReturned} this carries the panel's own rule — an Order
+     * that is already 已归还 is refused rather than written a second return time
+     * — because the panel's button is the only thing that would otherwise ask
+     * for it. The scoping is the same as every other Customer-facing write.
+     * @param customerId - the Customer whose Order may be closed.
+     * @param orderId - the Order number.
+     * @param returnedAt - the return time, an offset-carrying ISO-8601 stamp.
+     * @returns the closed Order, or `missing` when this Customer owns no such
+     *   Order and `closed` — with the row, so the caller can name the status it
+     *   is in — when it is not 进行中 any more. Nothing is written either way.
+     */
+    async closeOpenOrder(customerId, orderId, returnedAt) {
+      const order = ownedOrder(orders, customerId, orderId)
+      if (order === undefined) return { ok: false, reason: 'missing' }
+      if (order.status !== 'in_progress') return { ok: false, reason: 'closed', order }
+      const updated = closedOrder(order, returnedAt)
+      await orders.put(orderId, updated)
+      return { ok: true, order: updated }
+    },
   })
+}
+
+/** Order numbers minted per attempt before the plugin gives up and fails loud. */
+const ORDER_ID_ATTEMPTS = 16
+
+/**
+ * Mint an Order number no row holds.
+ * @param orders - the open `orders` table.
+ * @returns the number, e.g. `ord-9f3c1a04`.
+ * @throws {Error} when every attempt drew a number already in the table.
+ */
+function mintOrderId(orders) {
+  for (let attempt = 0; attempt < ORDER_ID_ATTEMPTS; attempt += 1) {
+    const orderId = `ord-${randomBytes(4).toString('hex')}`
+    if (orders.get(orderId) === undefined) return orderId
+  }
+  throw new Error('customer-service-store: every minted Order number was already taken')
+}
+
+/**
+ * Read one of a Customer's Orders, scoped to the Customer the caller resolved.
+ *
+ * This one lookup is the isolation guarantee: an Order belonging to anyone else
+ * is not found, whatever the caller asks for (ADR-0004). Every read and write
+ * that names a single Order goes through it, so there is one place that decides
+ * what "this Customer's Order" means.
+ * @param table - the open `orders` table.
+ * @param customerId - the Customer whose Orders may be read.
+ * @param orderId - the Order number.
+ * @returns the Order row, or `undefined` when this Customer owns no such Order.
+ */
+function ownedOrder(table, customerId, orderId) {
+  const order = table.get(orderId)
+  return order?.customerId === customerId ? order : undefined
+}
+
+/**
+ * The stored Order as closing it writes it.
+ *
+ * Spread first so the stored field order is preserved: a rewrite that only adds
+ * the return time is what the grant's change reading expects (ADR-0009).
+ * @param order - the Order as it stands.
+ * @param returnedAt - the return time, an offset-carrying ISO-8601 stamp.
+ * @returns the row to store.
+ */
+function closedOrder(order, returnedAt) {
+  return { ...order, status: 'returned', returnedAt }
+}
+
+/**
+ * The stored Order as refunding it writes it.
+ *
+ * Spread first for the same reason closing one spreads first: a rewrite that
+ * only moves the status and adds the refund time is what the grant's change
+ * reading expects (ADR-0009).
+ * @param order - the Order as it stands.
+ * @param refundedAt - the refund time, an offset-carrying ISO-8601 stamp.
+ * @returns the row to store.
+ */
+function refundedOrder(order, refundedAt) {
+  return { ...order, status: 'refunded', refundedAt }
 }
 
 /**
@@ -285,6 +401,25 @@ async function seed(table, demos, keyField, project) {
     const record = project(demo)
     if (table.get(record[keyField]) !== undefined) continue
     await table.put(record[keyField], record)
+  }
+}
+
+/**
+ * Bring Orders refunded before 已退款 was a status forward to it.
+ *
+ * A demo database outlives a change to what a refund writes: a row refunded
+ * under the old model reads 已归还 while carrying a 退款时间, which the refund
+ * rule would now let through a second time. Nothing writes that pair any more,
+ * so the reading is unambiguous, and it is corrected on open rather than left
+ * to look like a bug in a demo. The record schema itself did not change —
+ * every stored row still parses, and only what a refund *writes* moved — so
+ * this needs no domain version of its own.
+ * @param table - the open `orders` table.
+ */
+async function carryRefundMarksForward(table) {
+  for (const [orderId, order] of table.entries()) {
+    if (order.refundedAt === undefined || order.status === 'refunded') continue
+    await table.put(orderId, { ...order, status: 'refunded' })
   }
 }
 

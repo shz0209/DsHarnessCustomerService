@@ -22,10 +22,9 @@
  * so one allowlist governs them all.
  */
 import { createGrants } from '../shared/grants.js'
-import { readJsonBody, registerJsonRoute, sendJson } from '../shared/http.js'
-import { ORDER_SCHEMA, orderLine, publicOrder } from '../shared/orders.js'
+import { readJsonBody, registerJsonRoute, requireLogin, sendJson } from '../shared/http.js'
+import { ORDER_SCHEMA, cardOrder, orderLine, publicOrder } from '../shared/orders.js'
 import { DEMO_ZONE_OFFSET, inDemoZone } from '../shared/time.js'
-import { ORDER_STATUS_LABELS } from '../shared/vocabulary.js'
 import { MANUAL_RETURN_TOOLS, manualReturnTools } from './manual-return.js'
 import { REFUND_TOOLS, refundTools } from './refund.js'
 
@@ -69,16 +68,6 @@ const OUTPUT_SCHEMA = {
       },
     },
   ],
-}
-
-/**
- * The candidates the card renders, each with the Chinese status label so the
- * browser needs no copy of the status vocabulary.
- * @param order - the stored Order row.
- * @returns the card's view of one candidate Order.
- */
-function candidateOrder(order) {
-  return { ...publicOrder(order), statusLabel: ORDER_STATUS_LABELS[order.status] }
 }
 
 /**
@@ -214,7 +203,7 @@ export function apply(ctx) {
       // persisted metadata carries the Chinese status label the model-facing
       // value has no room for (its schema is closed).
       presentationMeta: (_args, value) => value.outcome === 'selected'
-        ? { ...value, order: { ...value.order, statusLabel: ORDER_STATUS_LABELS[value.order.status] } }
+        ? { ...value, order: cardOrder(value.order) }
         : value,
     },
     async execute(args, exec) {
@@ -236,7 +225,7 @@ export function apply(ctx) {
         callId: exec.callId,
         sessionId: agent.session.id,
         query: filter,
-        candidates: offered.map(candidateOrder),
+        candidates: offered.map(cardOrder),
         signal: exec.signal,
       })
       if (answer.kind === 'cancelled') throw new Error('订单确认已取消：客户没有作答。')
@@ -368,11 +357,8 @@ async function askCustomer(pending, question) {
  */
 function readQuestion(ctx, pending) {
   return (req, res) => {
-    const login = ctx.customerIdentity.forRequest(req)
-    if (login === undefined) {
-      sendJson(res, 401, { error: '请先登录' })
-      return
-    }
+    const login = requireLogin(ctx, req, res)
+    if (login === undefined) return
     const callId = new URL(req.url ?? '/', 'http://x').searchParams.get('callId')
     // Another Session's question is not found rather than forbidden: the card
     // is not a resource a Customer may learn exists.
@@ -394,11 +380,8 @@ function readQuestion(ctx, pending) {
  */
 function answerQuestion(ctx, pending) {
   return async (req, res) => {
-    const login = ctx.customerIdentity.forRequest(req)
-    if (login === undefined) {
-      sendJson(res, 401, { error: '请先登录' })
-      return
-    }
+    const login = requireLogin(ctx, req, res)
+    if (login === undefined) return
     const body = await readJsonBody(req)
     if (body === undefined || typeof body.callId !== 'string'
       || !(body.orderId === null || typeof body.orderId === 'string')) {

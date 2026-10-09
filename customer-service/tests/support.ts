@@ -54,7 +54,7 @@ export interface CustomerStore {
    */
   markReturned(customerId: string, orderId: string, returnedAt: string): Promise<StoredOrder | undefined>
   /**
-   * Mark one of a Customer's own Orders refunded, leaving its status alone.
+   * Mark one of a Customer's own Orders refunded, which moves it to 已退款.
    * @param customerId - the owning Customer, never a caller-supplied value.
    * @param orderId - the Order number.
    * @param refundedAt - the refund time, an offset-carrying ISO-8601 stamp.

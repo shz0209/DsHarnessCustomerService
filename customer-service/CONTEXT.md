@@ -15,7 +15,7 @@ _Avoid_: User, 用户 — the harness already uses "user" for its own identity a
 The AI customer service agent a Customer converses with. Distinct from a Customer.
 
 **Administrator** (管理员):
-A Customer whose account carries an admin flag, used only for the back-office test panel. Not a separate kind of account.
+A Customer whose account carries an admin flag. Not a separate kind of account, and nothing in the demo requires one: the flag is a label the sidebar and the Agent's identity line show.
 
 ### Rental
 
@@ -25,8 +25,9 @@ Carries 订单号, 金额, 租借时间, 租借地点, customerId and status; a 
 
 **Order status** (订单状态):
 `进行中` (in progress) — the power bank is out with the Customer.
-`已归还` (returned) — the rental is closed.
-These two are the whole lifecycle; nothing else is a status. A refund does not change an Order's status.
+`已归还` (returned) — the power bank came back, so the rental is closed.
+`已退款` (refunded) — the money went back as well.
+These three are the whole lifecycle, and it runs one way: 进行中 → 已归还 → 已退款.
 
 **租借时间 / 借出时间** (rental time):
 The same field: the moment the power bank left the location. The two names are used interchangeably in the business rules; this glossary treats them as one term.
@@ -35,10 +36,10 @@ The same field: the moment the power bank left the location. The two names are u
 The moment the power bank came back, recorded when an Order becomes `已归还`. It is there only when the return was recorded: an Order may be `已归还` without one.
 
 **退款时间** (refund time):
-The moment the money went back, recorded when an Order is refunded. It is the Order's 已退款 mark, and it says nothing about the power bank: a refunded Order keeps whatever status it had.
+The moment the money went back, recorded when an Order becomes `已退款`.
 
 **租借地点** (rental location):
-The location a power bank was taken from. Also what the back-office form calls 地址.
+The location a power bank was taken from. Also what the panel's create form calls 地址.
 
 **VIP tier** (会员等级):
 The Customer's membership tier. Four tiers, ordered:
@@ -57,10 +58,15 @@ The Agent closing a rental on the Customer's behalf, for a Customer who cannot r
 It sets the Order to `已归还` and records the return time.
 
 **退款** (refund):
-The Agent returning the whole Order amount to the Customer. Recorded on the Order without changing its status.
+The Agent returning the whole Order amount to the Customer. It moves a `已归还` Order to `已退款` and records the refund time.
 
 **校验** (validation):
 A check the Agent must run before 人工还宝 or 退款, deciding whether that action is permitted for the Order. Each action has its own validation rules. A passing validation authorises exactly one action on exactly one Order.
 
 **凭证** (grant):
 What a passing 校验 hands the Agent. Bound to the Customer, the Order, the action and the conversation that earned it; spent by its first use, and short-lived. The action tools accept nothing else as authority.
+
+### Around the service
+
+**管理面板** (order panel):
+The logged-in Customer's own view of their Orders: it lists every Order they have whatever its status, creates one, and returns one. It is not a service action — nothing there runs a 校验 or spends a 凭证, because the Agent is not the one acting. What it does is scoped to the Customer by the login, like everything else.

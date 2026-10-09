@@ -1,20 +1,26 @@
 /**
  * Browser half of the customer-service UI plugin (issues #3, #4, #5, #6, #7,
- * #8). Hand-written in the closure factory form the Client module system loads
- * (ADR-0006): no build step, no `@deepseek-ai/dsh-*` import, `require` answers
- * from the loader's module table.
+ * #8, #9). Hand-written in the closure factory form the Client module system
+ * loads (ADR-0006): no build step, no `@deepseek-ai/dsh-*` import, `require`
+ * answers from the loader's module table.
  *
- * Three surfaces:
+ * The surfaces:
  *   - `shell.overlay` carries a full-viewport mask while nobody is logged in, so
  *     the conversation is neither visible nor reachable, and carries the login
  *     form with the demo credentials; once a login is live it renders nothing.
  *   - `sidebar` is the frame's whole left column, which this file takes over
- *     (issue #4): the Customer's account name and VIP tier, and the way out. The
+ *     (issue #4): the Customer's account name, VIP tier and the way out. The
  *     shipped occupant is registered at the default priority 0, so this file
  *     registers at priority -1 — the lowest-priority live entry of a single slot
  *     renders (see ADR-0007). The native navigation — session list, workspaces,
  *     settings — stops rendering with it, and while nobody is logged in the
  *     occupant renders nothing at all.
+ *   - `conversation.view` is the panel (issue #9): a third tab in the row 对话
+ *     and 轨迹 share, whose body takes the center pane while it is selected. It
+ *     lists the logged-in Customer's own Orders, creates one, and returns one,
+ *     all through `plugins/orders/`' routes. Registering `order: 20` puts it
+ *     after the shipped views (0 and 10); a view needs no conversation target of
+ *     its own when it renders from its own data.
  *   - `tool.call.toolview` keyed by `search_orders` is the order card (issue #5):
  *     the Orders the running call matched, and the buttons that answer it. The
  *     answer is the tool's return value, so a settled call renders from the
@@ -23,10 +29,8 @@
  *     #7): the Order the action closed, with its 归还时间, so the Customer sees
  *     the change on the card as well as hearing it from the Agent.
  *   - `tool.call.toolview` keyed by `refund` is the 退款 card (issue #8), the
- *     same way: the Order the action marked, with its 退款时间. An Order whose
- *     money has been returned carries the 已退款 badge on every card it appears
- *     on — the refund is a mark beside the status, not a status, so 已归还
- *     stays where it is.
+ *     same way: the Order the action moved to 已退款, with its 退款时间. The
+ *     status carries the money being back, so no card needs a badge for it.
  *
  * And one thing that is not a surface: the opening (issue #6). A Customer who
  * has just logged in has nothing to say yet, so this file asks the host to
@@ -77,8 +81,35 @@ window.__ModuleLoader__.load({
       unfinished: '退款未完成',
       badge: '退款已完成',
     }
-    /** The badge a refunded Order carries on every card it appears on. */
-    const REFUNDED_BADGE = '已退款'
+    /** The panel's routes: the calling Customer's own Orders. */
+    const ORDERS_PATH = '/orders'
+    const ORDERS_CREATE_PATH = '/orders/create'
+    const ORDERS_RETURN_PATH = '/orders/return'
+    /** The center-pane view this file adds beside 对话 and 轨迹 (issue #9). */
+    const ORDERS_VIEW_ID = 'customer-service-orders'
+    const ORDERS_VIEW_LABEL = '管理'
+    /** View order: the shipped 对话 is 0 and 轨迹 is 10, so this lands third. */
+    const ORDERS_VIEW_ORDER = 20
+    /** Everything the panel says. */
+    const PANEL_CARD = {
+      title: '我的订单',
+      create: '创建订单',
+      createLead: '造一笔「进行中」的订单：',
+      location: '租借地点',
+      amount: '金额（元）',
+      rentedAt: '租借时间',
+      rentedAtHint: '租借时间按北京时间填写，留空表示当前时间。订单号由系统生成，新订单的状态固定为「进行中」。',
+      submit: '创建',
+      cancel: '取消',
+      returnOrder: '归还',
+      working: '处理中…',
+      empty: '还没有订单，点「创建订单」造一笔。',
+      loading: '正在加载…',
+      loadError: '订单暂时无法加载，请稍后重试',
+      createError: '创建订单失败，请重试',
+      returnError: '归还失败，请重试',
+      amountError: '金额请填不小于 0 的数字，最多两位小数',
+    }
     /** Order-card polling interval while the host has not published the question yet. */
     const ORDER_POLL_INTERVAL_MS = 800
     /** Order-card polls before it stops and says it could not load the question. */
@@ -427,6 +458,19 @@ window.__ModuleLoader__.load({
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent);
 }
 .cs-order__field { display: flex; gap: 8px; }
+/* A form row in the panel: label beside input, rather than above it. */
+.cs-panel__field { display: flex; align-items: center; gap: 10px; }
+.cs-order__input {
+  flex: 1;
+  min-inline-size: 0;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
 .cs-order__label { flex: 0 0 4.5em; color: var(--dsw-alias-label-secondary); }
 .cs-order__value { flex: 1; min-inline-size: 0; word-break: break-word; }
 .cs-order__actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -457,11 +501,82 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-state-business-primary);
   font-size: 12px;
 }
-/* The refund mark is a fact about the money, not an action that just happened,
-   so it is the quiet grey badge rather than the primary-tinted one. */
-.cs-order__badge--refund {
+`
+
+    // The panel is a Conversation View: a third tab beside 对话 and 轨迹, whose
+    // body takes the center pane. It is a column of the app rather than an
+    // overlay, so everything in it paints with the app's own tokens — and it
+    // leaves the composer, which floats over the pane, the room the
+    // conversation publishes for it.
+    const PANEL_CSS = `
+.cs-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  block-size: 100%;
+  overflow: auto;
+  color: var(--dsw-alias-label-primary);
+  font: 13px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding-block: 20px calc(var(--dsh-composer-height, 152px) + 16px);
+  padding-inline: 24px;
+}
+.cs-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cs-panel__title { font-size: 15px; font-weight: 600; }
+.cs-panel__notice { color: var(--dsw-alias-state-business-primary); }
+.cs-panel__list { display: flex; flex-direction: column; gap: 10px; }
+.cs-panel__orderHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cs-panel__orderId { font-weight: 600; }
+.cs-panel__status {
+  padding: 1px 8px;
+  border-radius: 999px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+.cs-panel__status--in_progress {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+/* The create dialog is the one overlay this file draws over the signed-in app,
+   so it takes the mask and the layer from the app's tokens too. */
+.cs-panel__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 24px;
+}
+.cs-panel__backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--dsw-alias-bg-mask-3);
+}
+.cs-panel__dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  inline-size: min(480px, 100%);
+  padding: 18px 20px 20px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .24);
 }
 `
 
@@ -783,27 +898,14 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The 已退款 badge, for a card showing an Order whose money has been
-     * returned. Absent for every other Order.
-     * @param order - an Order as the host projected it.
-     * @returns the badge, or `null`.
-     */
-    function refundBadge(order) {
-      if (typeof order.refundedAt !== 'string') return null
-      return h('span', {
-        className: 'cs-order__badge cs-order__badge--refund',
-        'data-customer-service-refund': '',
-      }, REFUNDED_BADGE)
-    }
-
-    /**
-     * One Order as the card shows it: its fields, and the 已退款 mark when the
-     * money is back.
+     * One Order as the card shows it: the fields a Customer reads it by, the
+     * status among them — 已退款 is a status, so the money being back needs no
+     * badge of its own.
      * @param order - an Order as the host projected it.
      * @returns the rows one `cs-order__item` holds.
      */
     function orderBody(order) {
-      return [...orderFields(order), refundBadge(order)]
+      return orderFields(order)
     }
 
     /** The query the host ran, as one line, or `null` when it had no filter. */
@@ -968,14 +1070,265 @@ window.__ModuleLoader__.load({
 
     /**
      * The card for one 退款 call, exactly as the 人工还宝 card works. The Order
-     * it shows carries the 已退款 badge, because the money came back while the
-     * status stayed 已归还.
+     * it shows reads 已退款 in its status field, with the 退款时间 beside it.
      * @param props - the slot owner's share: the call's stage and its result.
      * @returns the card.
      */
     function RefundCard(props) {
       if (props.phase !== 'result') return orderNotice(REFUND_CARD.running)
       return actionResult(REFUND_CARD, props.block)
+    }
+
+    /**
+     * Read the panel's 金额（元） field as the integer cents the host stores.
+     * @param text - what the Customer typed.
+     * @returns the amount in cents, or `undefined` when it is not a usable one.
+     */
+    function parseAmount(text) {
+      const trimmed = text.trim()
+      if (!/^\d+(?:\.\d{1,2})?$/.test(trimmed)) return undefined
+      const cents = Math.round(Number(trimmed) * 100)
+      return Number.isSafeInteger(cents) ? cents : undefined
+    }
+
+    /**
+     * The create dialog: the panel's one form, and the only thing in this file
+     * that writes an Order.
+     *
+     * The dialog posts and reports back; the panel decides what to say and
+     * reloads, so the form never has to know how the list is kept.
+     * @param props - how to close the dialog, and what to do with a created Order.
+     * @returns the dialog.
+     */
+    function CreateOrderDialog({ onClose, onCreated }) {
+      const [form, setForm] = useState({ location: '', amount: '', rentedAt: '' })
+      const [error, setError] = useState('')
+      const [busy, setBusy] = useState(false)
+
+      /** Change one form field. */
+      const edit = (field, value) => setForm(current => ({ ...current, [field]: value }))
+
+      /** Post the Order the form describes, and hand it back to the panel. */
+      const submit = useCallback(event => {
+        event.preventDefault()
+        if (busy) return
+        const amountCents = parseAmount(form.amount)
+        if (amountCents === undefined) {
+          setError(PANEL_CARD.amountError)
+          return
+        }
+        setBusy(true)
+        setError('')
+        void (async () => {
+          const answer = await requestJson(ORDERS_CREATE_PATH, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              location: form.location,
+              amountCents,
+              // An empty field means "now", which is the host's reading too; a
+              // filled one is the time the Customer picked.
+              ...form.rentedAt === '' ? {} : { rentedAt: form.rentedAt },
+            }),
+          })
+          setBusy(false)
+          if (!answer.ok) {
+            setError(answer.payload?.error ?? PANEL_CARD.createError)
+            return
+          }
+          onCreated(answer.payload.order)
+        })().catch(() => {
+          setBusy(false)
+          setError(NETWORK_ERROR)
+        })
+      }, [busy, form, onCreated])
+
+      /** One labelled input of the form. */
+      const field = (label, input) => h('label', { className: 'cs-panel__field' }, label, input)
+
+      return createPortal(h('div', {
+        className: 'cs-panel__overlay',
+        'data-customer-service-panel': 'create',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': PANEL_CARD.create,
+      },
+      h('div', { className: 'cs-panel__backdrop', onClick: onClose }),
+      h('form', { className: 'cs-panel__dialog', onSubmit: submit },
+        h('div', { className: 'cs-panel__title' }, PANEL_CARD.createLead),
+        field(PANEL_CARD.location, h('input', {
+          className: 'cs-order__input',
+          name: 'location',
+          value: form.location,
+          placeholder: '万象城购物中心 B1 层服务台',
+          disabled: busy,
+          onChange: event => edit('location', event.target.value),
+        })),
+        field(PANEL_CARD.amount, h('input', {
+          className: 'cs-order__input',
+          name: 'amount',
+          value: form.amount,
+          inputMode: 'decimal',
+          placeholder: '3.00',
+          disabled: busy,
+          onChange: event => edit('amount', event.target.value),
+        })),
+        field(PANEL_CARD.rentedAt, h('input', {
+          className: 'cs-order__input',
+          name: 'rentedAt',
+          type: 'datetime-local',
+          value: form.rentedAt,
+          disabled: busy,
+          onChange: event => edit('rentedAt', event.target.value),
+        })),
+        h('div', { className: 'cs-order__hint' }, PANEL_CARD.rentedAtHint),
+        error === '' ? null : h('div', { className: 'cs-order__error', role: 'alert' }, error),
+        h('div', { className: 'cs-panel__actions' },
+          h('button', {
+            type: 'submit',
+            className: 'cs-order__button cs-order__button--primary',
+            disabled: busy || form.location.trim() === '',
+          }, busy ? PANEL_CARD.working : PANEL_CARD.submit),
+          h('button', {
+            type: 'button',
+            className: 'cs-order__button',
+            disabled: busy,
+            onClick: onClose,
+          }, PANEL_CARD.cancel),
+        ),
+      )), document.body)
+    }
+
+    /**
+     * The panel (issue #9): every Order the logged-in Customer has, a way to
+     * create one, and a way to close one — the third Conversation View, beside
+     * 对话 and 轨迹.
+     *
+     * It renders the routes' answer rather than anything it holds itself: which
+     * Orders exist, what state they are in and what number a new one gets are
+     * the server's to say, and the Customer it asks about is the one the login
+     * cookie names. So the panel has nothing to keep in step, and a reload shows
+     * the same thing.
+     * @returns the panel.
+     */
+    function OrdersPanel() {
+      const [data, setData] = useState({ status: 'loading', orders: [] })
+      const [notice, setNotice] = useState('')
+      const [error, setError] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [creating, setCreating] = useState(false)
+
+      const load = useCallback(async () => {
+        const answer = await requestJson(ORDERS_PATH)
+        if (!answer.ok || !Array.isArray(answer.payload?.orders)) throw new Error(PANEL_CARD.loadError)
+        setData({ status: 'ready', orders: answer.payload.orders })
+      }, [])
+
+      useEffect(() => {
+        let cancelled = false
+        void load().catch(() => {
+          if (!cancelled) setData({ status: 'unavailable', orders: [] })
+        })
+        return () => {
+          cancelled = true
+        }
+      }, [load])
+
+      /** Take the created Order into the list, and say which number it got. */
+      const created = useCallback(order => {
+        setCreating(false)
+        setError('')
+        setNotice(`已创建订单 ${order.orderId}：${order.location}，${formatStamp(order.rentedAt)} 租出，`
+          + `${formatAmount(order.amountCents)}，状态「${order.statusLabel}」。`)
+        void load().catch(() => {
+          setError(PANEL_CARD.loadError)
+        })
+      }, [load])
+
+      /** Close one Order, and say when it was returned. */
+      const returnOrder = useCallback(orderId => {
+        if (busy) return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        void (async () => {
+          let answer
+          try {
+            answer = await requestJson(ORDERS_RETURN_PATH, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ orderId }),
+            })
+          } catch {
+            setBusy(false)
+            setError(NETWORK_ERROR)
+            return
+          }
+          setBusy(false)
+          if (!answer.ok) {
+            setError(answer.payload?.error ?? PANEL_CARD.returnError)
+            return
+          }
+          const order = answer.payload.order
+          setNotice(`订单 ${order.orderId} 已归还，归还时间 ${formatStamp(order.returnedAt)}。`)
+          // The write stands whether or not the reload lands; a reload that
+          // fails is a stale list, not a failed 归还.
+          void load().catch(() => {
+            setError(PANEL_CARD.loadError)
+          })
+        })()
+      }, [busy, load])
+
+      const body = data.status === 'loading'
+        ? h('div', { className: 'cs-order__hint' }, PANEL_CARD.loading)
+        : data.status === 'unavailable'
+          ? h('div', { className: 'cs-order__error', role: 'alert' }, PANEL_CARD.loadError)
+          : data.orders.length === 0
+            ? h('div', { className: 'cs-order__hint' }, PANEL_CARD.empty)
+            : h('div', { className: 'cs-panel__list' }, ...data.orders.map(order => h('div', {
+              key: order.orderId,
+              className: 'cs-order__item',
+              'data-customer-service-panel-order': order.orderId,
+            },
+            h('div', { className: 'cs-panel__orderHead' },
+              h('span', { className: 'cs-panel__orderId' }, order.orderId),
+              h('span', {
+                className: `cs-panel__status cs-panel__status--${order.status}`,
+                'data-customer-service-panel-status': order.status,
+              }, order.statusLabel ?? ''),
+            ),
+            ...orderFields(order),
+            // Only a power bank that is still out can come back; the other two
+            // statuses are further along the lifecycle than this button.
+            order.status === 'in_progress'
+              ? h('div', { className: 'cs-order__actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'cs-order__button',
+                  disabled: busy,
+                  onClick: () => returnOrder(order.orderId),
+                }, PANEL_CARD.returnOrder),
+              )
+              : null,
+            )))
+
+      return h('div', { className: 'cs-panel', 'data-customer-service-panel': 'orders' },
+        h('div', { className: 'cs-panel__header' },
+          h('div', { className: 'cs-panel__title' }, PANEL_CARD.title),
+          h('button', {
+            type: 'button',
+            className: 'cs-order__button cs-order__button--primary',
+            'data-customer-service-panel-create': '',
+            onClick: () => {
+              setCreating(true)
+            },
+          }, PANEL_CARD.create),
+        ),
+        notice === '' ? null : h('div', { className: 'cs-panel__notice', role: 'status' }, notice),
+        error === '' ? null : h('div', { className: 'cs-order__error', role: 'alert' }, error),
+        body,
+        creating ? h(CreateOrderDialog, { onClose: () => setCreating(false), onCreated: created }) : null,
+      )
     }
 
     return {
@@ -999,6 +1352,15 @@ window.__ModuleLoader__.load({
             style.remove()
           }
         }, 'customer-service-ui: order card styles')
+        ctx.effect(() => {
+          const style = document.createElement('style')
+          style.dataset.customerService = 'panel'
+          style.textContent = PANEL_CSS
+          document.head.append(style)
+          return () => {
+            style.remove()
+          }
+        }, 'customer-service-ui: panel styles')
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay',
           id: 'customer-service.gate',
@@ -1011,6 +1373,17 @@ window.__ModuleLoader__.load({
           name: 'sidebar',
           priority: -1,
         }, CustomerSidebar))
+        // The panel is a Conversation View: a third tab in the row 对话 and 轨迹
+        // share, whose body takes the center pane while it is selected. The
+        // shipped views sit at orders 0 and 10, so 20 puts this one last, to
+        // their right. A View needs no conversation target of its own — this one
+        // renders from its own routes rather than from the transcript.
+        ctx.slots.inject('conversation.view', () => ctx.slots.register({
+          name: 'conversation.view',
+          id: ORDERS_VIEW_ID,
+          order: ORDERS_VIEW_ORDER,
+          label: ORDERS_VIEW_LABEL,
+        }, OrdersPanel))
         // Keyed by the wire tool name: the key IS the dispatch value, so a
         // rename on either side would silently fall back to the generic row.
         ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({

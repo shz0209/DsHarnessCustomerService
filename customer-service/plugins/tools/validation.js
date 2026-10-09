@@ -13,8 +13,7 @@
  * forbidden.
  */
 import { GRANT_REFUSALS, GRANT_TTL_MS } from '../shared/grants.js'
-import { ORDER_SCHEMA, publicOrder } from '../shared/orders.js'
-import { ORDER_STATUS_LABELS } from '../shared/vocabulary.js'
+import { ORDER_SCHEMA, cardOrder, publicOrder } from '../shared/orders.js'
 
 /** The only argument either tool of a pair takes. */
 const ORDER_PARAMETER = 'orderId'
@@ -190,9 +189,7 @@ function actionOutput(report) {
     render: (_args, value) => [{ type: 'text', text: report(value.order) }],
     // The card renders the settled Order from the persisted metadata, so the
     // Chinese status label rides along.
-    presentationMeta: (_args, value) => ({
-      order: { ...value.order, statusLabel: ORDER_STATUS_LABELS[value.order.status] },
-    }),
+    presentationMeta: (_args, value) => ({ order: cardOrder(value.order) }),
   }
 }
 

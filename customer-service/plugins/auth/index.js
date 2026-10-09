@@ -23,7 +23,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { SEARCH_ORDERS_TOOL } from '../tools/index.js'
-import { readJsonBody, registerJsonRoute, sendJson } from '../shared/http.js'
+import { readJsonBody, registerJsonRoute, requireLogin, sendJson } from '../shared/http.js'
 import { TIER_LABELS } from '../shared/vocabulary.js'
 
 /** Cordis plugin name. */
@@ -231,11 +231,8 @@ export function apply(ctx, config) {
    * @param res - the response to write.
    */
   const opening = async (req, res) => {
-    const login = ctx.customerIdentity.forRequest(req)
-    if (login === undefined) {
-      sendJson(res, 401, { error: '请先登录' })
-      return
-    }
+    const login = requireLogin(ctx, req, res)
+    if (login === undefined) return
     const body = await readJsonBody(req)
     if (body !== undefined && body.clientTimeZone !== undefined && typeof body.clientTimeZone !== 'string') {
       sendJson(res, 400, { error: '请求格式不正确' })

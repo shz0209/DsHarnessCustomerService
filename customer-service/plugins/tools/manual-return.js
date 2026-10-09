@@ -23,6 +23,13 @@ const MANUAL_RETURN_WINDOW_MS = 2 * 60 * 60 * 1000
 /** What this action is called in the messages the model reads. */
 const OPERATION = '人工还宝'
 
+/** The refusal a power bank that has already come back gets. */
+const ALREADY_RETURNED = '不允许人工还宝，该订单已归还'
+
+/** The refusal an Order that has also been refunded gets: the money is back
+ * too, so naming 已归还 would describe a status it no longer has. */
+const ALREADY_REFUNDED = '不允许人工还宝，该订单已退款'
+
 /**
  * Build the two 人工还宝 tools.
  * @param ctx - plugin context carrying the login binding and the Order table.
@@ -39,7 +46,7 @@ export function manualReturnTools(ctx, grants) {
       ctx.customerStore.markReturned(customer.customerId, orderId, inDemoZone(now)),
     report: order => `已还宝：${orderLine(order)}，归还时间 ${stampText(order.returnedAt)}。请把这个结果告知客户。`,
     validateLead: '按固定规则校验这笔订单能不能人工还宝，并把结论转达给客户。规则由代码判定，你不要自己判断，也不要因为客户坚持就改口径：',
-    rules: '订单已是「已归还」→ 不允许；当前时间 − 租借时间 超过两小时（恰好两小时算允许）→ 不允许；否则允许。时间以服务端当前时间为准。',
+    rules: '订单不是「进行中」（已归还或已退款，各按各自的状态回绝）→ 不允许；当前时间 − 租借时间 超过两小时（恰好两小时算允许）→ 不允许；否则允许。时间以服务端当前时间为准。',
     actionLead: '把一笔订单置为「已归还」并记录归还时间。',
   })
 }
@@ -47,14 +54,17 @@ export function manualReturnTools(ctx, grants) {
 /**
  * Decide one Order against the fixed 人工还宝 rules.
  *
- * The status is read before the clock: a rental that has already been returned
- * is closed rather than late, and telling its Customer that two hours have
- * passed would name a rule the Order is no longer subject to.
+ * The status is read before the clock: a rental whose power bank is already
+ * back is closed rather than late, and telling its Customer that two hours have
+ * passed would name a rule the Order is no longer subject to. The refusal names
+ * the status the Order is really in, so a refunded one is not called 已归还.
  * @param decision - the calling Customer, their Order, and the server instant.
  * @returns whether the return is allowed, and the sentence the Customer reads.
  */
 function manualReturnVerdict({ order, now }) {
-  if (order.status === 'returned') return { allowed: false, text: '不允许人工还宝，该订单已归还' }
+  if (order.status !== 'in_progress') {
+    return { allowed: false, text: order.status === 'refunded' ? ALREADY_REFUNDED : ALREADY_RETURNED }
+  }
   if (now - Date.parse(order.rentedAt) > MANUAL_RETURN_WINDOW_MS) {
     return { allowed: false, text: '不允许人工还宝，借出时间已超过两小时' }
   }
