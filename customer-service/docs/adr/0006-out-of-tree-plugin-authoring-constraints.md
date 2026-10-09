@@ -6,6 +6,14 @@
 
 代价是这两半边都拿不到 harness 与 React 的类型检查。类型系统在这条路径上让位给人工核对，约定面只有三处：覆盖层里的加载行名字与路径、槽位名、包的 `dsh.client` 声明；升级 harness 时核对这三处即可。
 
+## 修正：`zod` 是唯一可解析的例外（issue #3）
+
+上面「裸说明符在运行期解析不到」对 `@deepseek-ai/dsh-*` 成立，对**仓库根目录自己依赖的包**不成立：Node 从本目录向上找 `node_modules`，会在仓库根找到 `zod`，所以 `plugins/store/index.js` 里 `import { z } from 'zod'` 能解析。
+
+这条例外无法避免，因为 issue #1 指定用 **storage-domain** 取库，而它对表的要求是 `valueSchema: ZodType<V>` 并在读盘时调 `.parse()`（`packages/storage/storage-domain/src/spec.ts:29`）——手写的仿造对象在第一次读取时就会炸。于是约定面从三处变四处，多出来的一处是：**本目录可以 import 的包，仅限仓库根 `package.json` 直接依赖、且与 harness 版本无关的那些**（目前只有 `zod`）。要新加一个之前，先确认它不属于 `@deepseek-ai/dsh-*`，并且没有别的办法拿到同样的能力。
+
+`customerDomain` 仍按字面量手写、不走仓库的 `defineDomain` 校验器，理由不变：那个校验器 import 不到。
+
 ## Considered Options
 
 - **把 `customer-service/` 加进 pnpm workspace。** 裸说明符与 tsdown 预设都能直接用。但那样它就成了一等公民包：`pnpm install` 会为它建链，仓库的 workspace 级门禁（依赖检查、`verify-cordis-config`、`hygiene`）会扫到它，这正好是 [ADR-0003](0003-out-of-tree-local-plugin-directory.md) 要避免的成本。

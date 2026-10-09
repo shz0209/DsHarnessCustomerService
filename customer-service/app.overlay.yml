@@ -1,0 +1,31 @@
+# Customer Service demo overlay: load the out-of-tree host plugins.
+#
+# Applied with `--patch customer-service/app.overlay.yml` from the repository
+# root; relative plugin names resolve against this file's directory, so the rows
+# point into `customer-service/plugins/` regardless of the invoking directory.
+# The database path below is the one cwd-relative value in this file, which is
+# why the launch command is documented as running from the repository root.
+- insert:
+    - id: customer-service-storage-sqlite
+      name: '@deepseek-ai/dsh-storage-sqlite'
+      config:
+        path: customer-service/data/customer-service.sqlite
+# Keep the shipped JSON backend as the default and route only this domain to
+# SQLite; an id-targeted patch replaces the whole config, so both keys restate.
+- id: storage-domain
+  config:
+    backend: json
+    routes:
+      customer: sqlite
+- insert:
+    - id: customer-service-store
+      name: ./plugins/store/index.js
+    # The Workspace every customer Session is created in. Resolved against the
+    # launch directory, so this is the second value that requires starting from
+    # the repository root (see README).
+    - id: customer-service-auth
+      name: ./plugins/auth/index.js
+      config:
+        workspacePath: !!js process.getBuiltinModule('node:path').resolve('customer-service')
+    - id: customer-service-ui
+      name: ./plugins/ui/index.js
