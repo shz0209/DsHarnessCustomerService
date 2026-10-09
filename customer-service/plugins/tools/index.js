@@ -1,23 +1,31 @@
 /**
- * Customer Service tools: the one tool a Customer-facing agent may see or call,
- * and the blocking order card it presents.
+ * Customer Service tools: the tools a Customer-facing agent may see or call,
+ * and the blocking order card `search_orders` presents.
  *
- * The tool is registered globally and then masked down to {@link ALLOWED_TOOLS}
- * on every agent scope, which is also declared native there (ADR-0005: the
- * restriction, the guard, the prompt filter, and the presentation together are
- * the mask). The mask is a hardcoded security invariant — no config field turns
- * it off — so the model can neither see nor call the harness's own tools, a
- * preset's delegation tools included, even though all of them are registered in
- * the same process.
+ * Every tool is registered globally and then masked down to
+ * {@link ALLOWED_TOOLS} on every agent scope, which is also declared native
+ * there (ADR-0005: the restriction, the guard, the prompt filter, and the
+ * presentation together are the mask). The mask is a hardcoded security
+ * invariant — no config field turns it off — so the model can neither see nor
+ * call the harness's own tools, a preset's delegation tools included, even
+ * though all of them are registered in the same process.
  *
  * `search_orders` blocks until the Customer answers on the card. The candidates
  * cannot ride the session journal (an out-of-tree plugin cannot mint a session
  * event), so the card reads them from the `order-question` route and posts the
  * answer back; the tool's return value is the Order the Customer picked, which
  * keeps "model-visible ⟺ logged" true for free (ADR-0001).
+ *
+ * 人工还宝 arrives as two more tools rather than one: 校验 decides and issues
+ * the grant, the action spends it (ADR-0002). They are built in `manual-return.js`
+ * and published here with everything else, so one allowlist governs them all.
  */
-import { ORDER_STATUSES, ORDER_STATUS_LABELS } from '../shared/vocabulary.js'
+import { createGrants } from '../shared/grants.js'
 import { readJsonBody, registerJsonRoute, sendJson } from '../shared/http.js'
+import { ORDER_SCHEMA, orderLine, publicOrder } from '../shared/orders.js'
+import { DEMO_ZONE_OFFSET, inDemoZone } from '../shared/time.js'
+import { ORDER_STATUS_LABELS } from '../shared/vocabulary.js'
+import { MANUAL_RETURN_TOOLS, manualReturnTools } from './manual-return.js'
 
 /** Cordis plugin name. */
 export const name = 'customer-service-tools'
@@ -26,30 +34,18 @@ export const name = 'customer-service-tools'
  * binding, the Order table, and the HTTP router behind the trust fence. */
 export const inject = ['tools', 'agents', 'customerIdentity', 'customerStore', 'webServer', 'connection']
 
-/** The one tool this deployment allows, and the name the opening protocol calls
- * it by. The browser's Card is keyed by the same name but cannot import it —
- * a rename has to reach `plugins/ui/client.js` by hand (ADR-0006). */
+/** The tool that queries Orders, and the name the opening protocol calls it by.
+ * The browser's Card is keyed by the same name but cannot import it — a rename
+ * has to reach `plugins/ui/client.js` by hand (ADR-0006). */
 export const SEARCH_ORDERS_TOOL = 'search_orders'
 
-/** The only tool any agent of this deployment may see or call. */
-export const ALLOWED_TOOLS = [SEARCH_ORDERS_TOOL]
+/** The only tools any agent of this deployment may see or call: querying an
+ * Order, and the 校验 + action pair that returns one by hand. The refund pair
+ * (issue #8) joins them here. */
+export const ALLOWED_TOOLS = [SEARCH_ORDERS_TOOL, ...MANUAL_RETURN_TOOLS]
 
-/** Argument names the tool accepts. Anything else is rejected, not ignored. */
+/** Argument names `search_orders` accepts. Anything else is rejected, not ignored. */
 const PARAMETER_NAMES = ['location', 'rentedFrom', 'rentedTo']
-
-/** One Order as the model receives it. */
-const ORDER_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['orderId', 'location', 'rentedAt', 'amountCents', 'status'],
-  properties: {
-    orderId: { type: 'string', description: '订单号。' },
-    location: { type: 'string', description: '租借地点。' },
-    rentedAt: { type: 'string', description: '租借时间，ISO-8601。' },
-    amountCents: { type: 'integer', description: '金额，单位分。' },
-    status: { type: 'string', enum: [...ORDER_STATUSES], description: '订单状态。' },
-  },
-}
 
 /** What `search_orders` returns: the picked Order, or why there is none. */
 const OUTPUT_SCHEMA = {
@@ -72,24 +68,6 @@ const OUTPUT_SCHEMA = {
       },
     },
   ],
-}
-
-/**
- * Project a stored Order row onto the fields the model may see.
- *
- * `customerId` is dropped: it is an opaque storage key the model can neither
- * use nor influence, and every Order it can reach is already the caller's own.
- * @param order - the stored Order row.
- * @returns the Order fields the model may see.
- */
-function publicOrder(order) {
-  return {
-    orderId: order.orderId,
-    location: order.location,
-    rentedAt: order.rentedAt,
-    amountCents: order.amountCents,
-    status: order.status,
-  }
 }
 
 /**
@@ -173,28 +151,6 @@ function qualify(value) {
   return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}${DEMO_ZONE_OFFSET}`
 }
 
-/**
- * Render one instant as ISO-8601 in this deployment's zone.
- * @param instant - milliseconds since the epoch.
- * @returns e.g. `2026-09-21T08:05:00.000+08:00`.
- */
-function inDemoZone(instant) {
-  const shifted = new Date(instant + DEMO_ZONE_OFFSET_MS).toISOString()
-  return `${shifted.slice(0, -1)}${DEMO_ZONE_OFFSET}`
-}
-
-/**
- * The zone this demo speaks, stated once because three things have to agree on
- * it: the seeded Orders carry `+08:00` stamps, the harness's clock context tells
- * the model to read unqualified times in the browser's zone (the same one for
- * anyone running this demo where it is meant to run), and the parameters below
- * accept times in it. A parameter with no offset therefore means here, not UTC.
- */
-const DEMO_ZONE_OFFSET = '+08:00'
-
-/** {@link DEMO_ZONE_OFFSET} in milliseconds, for shifting an instant into it. */
-const DEMO_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000
-
 /** Prefix every tool's guidance section is registered under. */
 const TOOL_SECTION_PREFIX = 'tool:'
 
@@ -212,15 +168,8 @@ function namesHiddenTool(name) {
     && !ALLOWED_TOOLS.includes(name.slice(TOOL_SECTION_PREFIX.length))
 }
 
-/** One Order as a line of model-facing text. */
-function orderLine(order) {
-  const amount = (order.amountCents / 100).toFixed(2)
-  return `订单号 ${order.orderId}，租借地点 ${order.location}，租借时间 ${order.rentedAt}，`
-    + `金额 ¥${amount}，状态 ${ORDER_STATUS_LABELS[order.status]}`
-}
-
 /**
- * Mask every agent down to {@link ALLOWED_TOOLS} and publish the tool, its
+ * Mask every agent down to {@link ALLOWED_TOOLS} and publish the tools, their
  * routes, and the pending-question table.
  * @param ctx - plugin context carrying the Tool registry, the Agent registry,
  *   the login binding, the Order table, and the HTTP router.
@@ -296,6 +245,14 @@ export function apply(ctx) {
   }
 
   ctx.effect(() => ctx.tools.register(definition), 'customer-service-tools: search_orders')
+
+  // 校验 grants live here, in the process that runs both halves of 人工还宝
+  // (ADR-0002; ADR-0009 on why they are not persisted).
+  const grants = createGrants()
+  for (const tool of manualReturnTools(ctx, grants)) {
+    ctx.effect(() => ctx.tools.register(tool), `customer-service-tools: ${tool.name}`)
+  }
+
   registerJsonRoute(ctx, { label: name, path: '/order-question', method: 'GET', handler: readQuestion(ctx, pending) })
   registerJsonRoute(ctx, { label: name, path: '/order-question/answer', method: 'POST', handler: answerQuestion(ctx, pending) })
 

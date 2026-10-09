@@ -5,8 +5,9 @@
  *
  * This plugin owns the database. It is the only place that opens a storage
  * domain, so the table layout and the credentials never leak past the service
- * surface. Every read of an Order is scoped by `customerId`, which the caller
- * takes from the login binding rather than from a tool argument (ADR-0004).
+ * surface. Every read and write of an Order is scoped by `customerId`, which
+ * the caller takes from the login binding rather than from a tool argument
+ * (ADR-0004).
  *
  * Imports `zod` because a storage-domain table schema must be a zod schema.
  * The repository root has `zod`, so Node resolves it from here even though this
@@ -43,6 +44,9 @@ const customerRecord = z.object({
  * `amountCents` is an integer so a demo about money never rounds, and
  * `rentedAt` is an offset-carrying ISO-8601 timestamp so the card shows the
  * rental time the Customer experienced rather than one the browser guesses.
+ * `returnedAt` is the same kind of stamp, written when an Order is closed;
+ * seeded Orders that arrive 已归还 carry none, because no return was recorded
+ * for them.
  */
 const orderRecord = z.object({
   orderId: z.string().min(1),
@@ -51,6 +55,7 @@ const orderRecord = z.object({
   amountCents: z.number().int().min(0),
   rentedAt: z.string().min(1),
   status: z.enum(ORDER_STATUSES),
+  returnedAt: z.string().min(1).optional(),
 })
 
 /**
@@ -197,6 +202,45 @@ export async function apply(ctx) {
         matches.push(order)
       }
       return matches.sort((left, right) => Date.parse(right.rentedAt) - Date.parse(left.rentedAt))
+    },
+
+    /**
+     * Read one of a Customer's own Orders by its number.
+     *
+     * Same scoping as `searchOrders`: the Order is looked up under the caller's
+     * own `customerId`, so anyone else's Order is simply not found and the
+     * caller has nothing to compare it against (ADR-0004).
+     * @param customerId - the Customer whose Order may be read.
+     * @param orderId - the Order number.
+     * @returns the Order row, or `undefined` when this Customer owns no such
+     *   Order.
+     */
+    findOrder(customerId, orderId) {
+      const order = orders.get(orderId)
+      return order?.customerId === customerId ? order : undefined
+    },
+
+    /**
+     * Close one of a Customer's own Orders: set it 已归还 and record when.
+     *
+     * The write is unconditional — the business rules that decide whether an
+     * Order may be closed belong to the tool that owns them (the 人工还宝 tool
+     * refuses a 凭证 earned before the Order changed), and the back office
+     * (issue #9) closes Orders through this same call.
+     * @param customerId - the Customer whose Order may be written.
+     * @param orderId - the Order number.
+     * @param returnedAt - the return time, an offset-carrying ISO-8601 stamp.
+     * @returns the stored Order as it now stands, or `undefined` when this
+     *   Customer owns no such Order and nothing was written.
+     */
+    async markReturned(customerId, orderId, returnedAt) {
+      const order = orders.get(orderId)
+      if (order === undefined || order.customerId !== customerId) return undefined
+      // Spread first so the stored field order is preserved: a rewrite that only
+      // adds the return time is what the grant's change reading expects.
+      const updated = { ...order, status: 'returned', returnedAt }
+      await orders.put(orderId, updated)
+      return updated
     },
   })
 }

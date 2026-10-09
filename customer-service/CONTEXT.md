@@ -21,7 +21,7 @@ A Customer whose account carries an admin flag, used only for the back-office te
 
 **Order** (订单):
 One power bank rental: a customer takes a power bank from a location and is expected to return it to a location.
-Carries 订单号, 金额, 租借时间, 租借地点, customerId, and status. A Customer may have many Orders.
+Carries 订单号, 金额, 租借时间, 租借地点, customerId and status; a closed Order may also carry 归还时间. A Customer may have many Orders.
 
 **Order status** (订单状态):
 `进行中` (in progress) — the power bank is out with the Customer.
@@ -30,6 +30,9 @@ These two are the whole lifecycle; nothing else is a status. A refund does not c
 
 **租借时间 / 借出时间** (rental time):
 The same field: the moment the power bank left the location. The two names are used interchangeably in the business rules; this glossary treats them as one term.
+
+**归还时间** (return time):
+The moment the power bank came back, recorded when an Order becomes `已归还`. It is there only when the return was recorded: an Order may be `已归还` without one.
 
 **租借地点** (rental location):
 The location a power bank was taken from. Also what the back-office form calls 地址.
@@ -55,3 +58,6 @@ The Agent returning the whole Order amount to the Customer. Recorded on the Orde
 
 **校验** (validation):
 A check the Agent must run before 人工还宝 or 退款, deciding whether that action is permitted for the Order. Each action has its own validation rules. A passing validation authorises exactly one action on exactly one Order.
+
+**凭证** (grant):
+What a passing 校验 hands the Agent. Bound to the Customer, the Order, the action and the conversation that earned it; spent by its first use, and short-lived. The action tools accept nothing else as authority.

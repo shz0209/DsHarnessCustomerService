@@ -19,6 +19,8 @@ export interface StoredOrder {
   readonly amountCents: number
   readonly rentedAt: string
   readonly status: string
+  /** The return time, present only once the Order has been closed. */
+  readonly returnedAt?: string
 }
 
 /** The Customer and Order service published by `plugins/store`. */
@@ -33,6 +35,22 @@ export interface CustomerStore {
    * @returns the matching Orders.
    */
   searchOrders(customerId: string, filter: Record<string, string | undefined>): StoredOrder[]
+  /**
+   * Read one of a Customer's own Orders by its number.
+   * @param customerId - the owning Customer, never a caller-supplied value.
+   * @param orderId - the Order number.
+   * @returns the Order row, or `undefined` when this Customer owns no such Order.
+   */
+  findOrder(customerId: string, orderId: string): StoredOrder | undefined
+  /**
+   * Close one of a Customer's own Orders.
+   * @param customerId - the owning Customer, never a caller-supplied value.
+   * @param orderId - the Order number.
+   * @param returnedAt - the return time, an offset-carrying ISO-8601 stamp.
+   * @returns the stored Order as it now stands, or `undefined` when this
+   *   Customer owns no such Order and nothing was written.
+   */
+  markReturned(customerId: string, orderId: string, returnedAt: string): Promise<StoredOrder | undefined>
 }
 
 declare module '@deepseek-ai/cordis' {

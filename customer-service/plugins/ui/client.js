@@ -1,5 +1,5 @@
 /**
- * Browser half of the customer-service UI plugin (issues #3, #4, #5, and #6).
+ * Browser half of the customer-service UI plugin (issues #3, #4, #5, #6, #7).
  * Hand-written in the closure factory form the Client module system loads
  * (ADR-0006): no build step, no `@deepseek-ai/dsh-*` import, `require` answers
  * from the loader's module table.
@@ -19,6 +19,9 @@
  *     the Orders the running call matched, and the buttons that answer it. The
  *     answer is the tool's return value, so a settled call renders from the
  *     result the host logged and replays with no host state at all (ADR-0001).
+ *   - `tool.call.toolview` keyed by `manual_return` is the 人工还宝 card (issue
+ *     #7): the Order the action closed, with its 归还时间, so the Customer sees
+ *     the change on the card as well as hearing it from the Agent.
  *
  * And one thing that is not a surface: the opening (issue #6). A Customer who
  * has just logged in has nothing to say yet, so this file asks the host to
@@ -51,6 +54,14 @@ window.__ModuleLoader__.load({
     const SIGN_OUT_ERROR = '退出登录失败，请重试'
     /** Wire tool name this file's order card occupies; must equal the host tool's name. */
     const ORDER_TOOL_NAME = 'search_orders'
+    /** Wire tool name of 人工还宝, whose settled call renders the closed Order. */
+    const MANUAL_RETURN_TOOL_NAME = 'manual_return'
+    /** Shown while a 人工还宝 call is still running. */
+    const MANUAL_RETURN_RUNNING = '正在办理人工还宝…'
+    /** Shown for a 人工还宝 call that never produced a readable Order. */
+    const MANUAL_RETURN_UNFINISHED = '人工还宝未完成'
+    /** The badge a closed Order's card carries. */
+    const MANUAL_RETURN_DONE = '人工还宝已完成'
     /** Order-card polling interval while the host has not published the question yet. */
     const ORDER_POLL_INTERVAL_MS = 800
     /** Order-card polls before it stops and says it could not load the question. */
@@ -61,6 +72,8 @@ window.__ModuleLoader__.load({
     const ORDER_SUBMITTED = '已提交，等待客服回复…'
     /** Shown for an order card whose call never produced a readable outcome. */
     const ORDER_UNFINISHED = '订单查询未完成'
+    /** The badge a settled order card carries once the Customer picked the Order. */
+    const ORDER_CONFIRMED = '客户已确认'
 
     // Copy is written in Chinese rather than routed through the harness's
     // locale mechanism: this directory is outside the client-copy gate, and the
@@ -706,11 +719,11 @@ window.__ModuleLoader__.load({
 
     /**
      * The stored offset-carrying timestamp as local wall-clock text.
-     * @param rentedAt - the ISO-8601 timestamp the host stored.
-     * @returns `YYYY-MM-DD HH:MM`, which is the rental time at the venue.
+     * @param stamp - an ISO-8601 timestamp the host stored.
+     * @returns `YYYY-MM-DD HH:MM`, which is the time at the venue.
      */
-    function formatRentedAt(rentedAt) {
-      return typeof rentedAt === 'string' ? rentedAt.slice(0, 16).replace('T', ' ') : ''
+    function formatStamp(stamp) {
+      return typeof stamp === 'string' ? stamp.slice(0, 16).replace('T', ' ') : ''
     }
 
     /**
@@ -728,15 +741,19 @@ window.__ModuleLoader__.load({
 
     /**
      * The fields a Customer recognizes an Order by, plus its money and state.
+     *
+     * 归还时间 appears once the Order carries one, which is how a Customer sees
+     * that a 人工还宝 really closed it rather than only saying so.
      * @param order - an Order as the host projected it, with its status label.
      * @returns the field rows.
      */
     function orderFields(order) {
       return [
         orderField('租借地点', order.location),
-        orderField('租借时间', formatRentedAt(order.rentedAt)),
+        orderField('租借时间', formatStamp(order.rentedAt)),
         orderField('金额', formatAmount(order.amountCents)),
         orderField('状态', order.statusLabel ?? ''),
+        ...(typeof order.returnedAt === 'string' ? [orderField('归还时间', formatStamp(order.returnedAt))] : []),
       ]
     }
 
@@ -758,6 +775,37 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * A settled card showing one Order under a badge that says how it got there.
+     * @param kind - the `data-customer-service-order` state this card renders.
+     * @param badge - the badge copy.
+     * @param order - an Order as the host projected it.
+     * @returns the card.
+     */
+    function settledOrderCard(kind, badge, order) {
+      return h('div', { className: 'cs-order', 'data-customer-service-order': kind },
+        h('div', { className: 'cs-order__badge' }, badge),
+        h('div', { className: 'cs-order__list' },
+          h('div', { className: 'cs-order__item cs-order__item--selected' }, ...orderFields(order)),
+        ),
+      )
+    }
+
+    /**
+     * A settled card for a call that published no read Order: the call's own
+     * result text is then the only honest thing to show.
+     * @param title - what the card says happened.
+     * @param block - the settled result node.
+     * @returns the card.
+     */
+    function unreadableCallCard(title, block) {
+      const text = resultText(block.content)
+      return h('div', { className: 'cs-order', 'data-customer-service-order': 'failed' },
+        h('div', { className: 'cs-order__title' }, title),
+        text === '' ? null : h('div', { className: 'cs-order__error' }, text),
+      )
+    }
+
+    /**
      * The settled state, rendered from the result the host logged so a replayed
      * Session shows the same card with no host state at all.
      * @param block - the settled result node.
@@ -767,24 +815,13 @@ window.__ModuleLoader__.load({
       const meta = block.meta
       const outcome = meta !== null && typeof meta === 'object' ? meta.outcome : undefined
       if (outcome === 'selected' && meta.order !== undefined) {
-        return h('div', { className: 'cs-order', 'data-customer-service-order': 'confirmed' },
-          h('div', { className: 'cs-order__badge' }, '客户已确认'),
-          h('div', { className: 'cs-order__list' },
-            h('div', { className: 'cs-order__item cs-order__item--selected' }, ...orderFields(meta.order)),
-          ),
-        )
+        return settledOrderCard('confirmed', ORDER_CONFIRMED, meta.order)
       }
       if (outcome === 'declined') {
         return orderNotice('客户没有选中这次查到的订单，请再问一次大概的时间或地点')
       }
       if (outcome === 'none') return orderNotice('没有查到符合条件的订单')
-      // A failed or interrupted call carries no outcome; its own result text is
-      // the only honest thing to show.
-      const text = resultText(block.content)
-      return h('div', { className: 'cs-order', 'data-customer-service-order': 'failed' },
-        h('div', { className: 'cs-order__title' }, ORDER_UNFINISHED),
-        text === '' ? null : h('div', { className: 'cs-order__error' }, text),
-      )
+      return unreadableCallCard(ORDER_UNFINISHED, block)
     }
 
     /**
@@ -849,6 +886,38 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * The settled state of one 人工还宝 call: the Order as the host left it.
+     *
+     * Like the order card, this renders from the result the host logged — the
+     * Order it returned is persisted with the call, status label included — so a
+     * replayed Session shows the same closed Order with no host state at all.
+     * @param block - the settled result node.
+     * @returns the closed Order, or why the call returned none.
+     */
+    function manualReturnResult(block) {
+      const meta = block.meta
+      const order = meta !== null && typeof meta === 'object' ? meta.order : undefined
+      if (order !== null && typeof order === 'object') {
+        return settledOrderCard('returned', MANUAL_RETURN_DONE, order)
+      }
+      return unreadableCallCard(MANUAL_RETURN_UNFINISHED, block)
+    }
+
+    /**
+     * The card for one 人工还宝 call.
+     *
+     * There is nothing to answer here — the verdict was reached before this call
+     * and the Customer already heard it — so the running state says what is
+     * happening and the settled state shows what happened.
+     * @param props - the slot owner's share: the call's stage and its result.
+     * @returns the card.
+     */
+    function ManualReturnCard(props) {
+      if (props.phase !== 'result') return orderNotice(MANUAL_RETURN_RUNNING)
+      return manualReturnResult(props.block)
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
@@ -888,6 +957,10 @@ window.__ModuleLoader__.load({
           name: 'tool.call.toolview',
           key: ORDER_TOOL_NAME,
         }, OrderCard))
+        ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
+          name: 'tool.call.toolview',
+          key: MANUAL_RETURN_TOOL_NAME,
+        }, ManualReturnCard))
       },
     }
   },
