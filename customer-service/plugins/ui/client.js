@@ -244,6 +244,19 @@ window.__ModuleLoader__.load({
   font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .cs-sidebar--rail { align-items: center; padding: 14px 6px; gap: 10px; }
+/* 56px fits an initial, not a name; the account name rides on the tooltip. */
+.cs-sidebar__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 30px;
+  block-size: 30px;
+  border-radius: 50%;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
 .cs-sidebar__brand { font-size: 14px; font-weight: 600; }
 .cs-sidebar__account { display: flex; flex-direction: column; gap: 6px; min-inline-size: 0; }
 .cs-sidebar__name {
@@ -415,8 +428,14 @@ window.__ModuleLoader__.load({
 
       if (collapsed) {
         // The frame collapses the column and clips it; the occupant owns what
-        // the rail shows.
+        // the rail shows. The name is one initial wide, so the full account name
+        // is the tooltip's job here.
         return h('div', { className: 'cs-sidebar cs-sidebar--rail', 'data-customer-service-sidebar': 'rail' },
+          h('div', {
+            className: 'cs-sidebar__avatar',
+            title: customer.accountName,
+            'data-customer-service-account': '',
+          }, customer.accountName.slice(0, 1).toUpperCase()),
           tier,
           h('div', { className: 'cs-sidebar__spacer' }),
           signOutButton('cs-signout cs-signout--rail', '退出'),

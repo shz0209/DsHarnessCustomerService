@@ -12,7 +12,7 @@
 
 ## 后果
 
-- 列的几何形状仍归 `AppFrame`。占用者拿到 `{ collapsed, width }`，折叠时列被压到 56px 轨道（`collapsedWidth` 在 `data-platform=darwin` 与 `data-windows-titlebar` 上是 0）；轨道里显示什么由占用者自己决定——本项目只发 Web 半边，落到的是 56px，折叠时只留等级徽章与「退出」。
+- 列的几何形状仍归 `AppFrame`。占用者拿到 `{ collapsed, width }`，折叠时列被压到 56px 轨道（`collapsedWidth` 在 `data-platform=darwin` 与 `data-windows-titlebar` 上是 0）；轨道里显示什么由占用者自己决定——本项目只发 Web 半边，落到的是 56px，折叠时只留账号首字母头像、等级徽章与「退出」（56px 放不下账号名，全名挂在 tooltip 上）。
 - 原生侧栏声明的那批座位（`sidebar.brand.*`、`sidebar.toggle.badge`、`sidebar.panellist`、`sidebar.workspaces`、`sidebar.settings`、`sidebar.footer.action`）**仍然处于已声明状态**：声明跟着注册走，不跟着渲染走。因此本目录**不能**再声明这些键（一个槽位只有一个声明者，重复声明会抛错），#9 的管理入口要挂进本项目自己的侧栏组件里。
 - 原生侧栏插件（`ui-sidebar`、`ui-workspace`、`ui-settings-general` 等）仍然被加载，只是看不见。要卸载它们得改 profile 组成或动 `packages/`，两者都违反 ADR-0003。
 - 升级 harness 时要人工核对的约定多一处：槽位名 `sidebar`，以及原生占用者是否仍用默认优先级。约定面见 [ADR-0006](0006-out-of-tree-plugin-authoring-constraints.md)。
