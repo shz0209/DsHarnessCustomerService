@@ -23,21 +23,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as authPlugin from '../plugins/auth/index.js'
 import * as storePlugin from '../plugins/store/index.js'
 import { DEMO_ACCOUNTS } from '../plugins/store/index.js'
+import { agentDouble, asAgent, bodyOf, call, cookieValue, disposeAll, registerCleanup, requireService } from './support.js'
 
 /** Rejected credentials answer with this one message, naming neither field. */
 const CREDENTIALS_ERROR = '账号或密码错误'
 
 /** The Workspace the login Session must be created in. */
 const WORKSPACE_PATH = '/tmp/customer-service-demo-workspace'
-
-/** The services this file reads back out of the composition. */
-interface Services {
-  readonly webServer: { readonly port: number }
-  readonly systemPrompt: {
-    assemble(context?: unknown): Promise<{ readonly contexts: readonly { readonly text: string }[] }>
-  }
-  readonly customerStore: { findById(customerId: string): Record<string, unknown> | undefined }
-}
 
 interface Booted {
   readonly port: number
@@ -54,11 +46,7 @@ interface Booted {
   dispose(): Promise<void>
 }
 
-const cleanups: (() => Promise<void> | void)[] = []
-
-afterEach(async () => {
-  while (cleanups.length > 0) await cleanups.pop()!()
-})
+afterEach(disposeAll)
 
 /**
  * Compose the plugins under test behind a real listening web server.
@@ -96,26 +84,28 @@ async function boot(storageRoot = mkdtempSync(join(tmpdir(), 'customer-service-t
   await ctx.plugin(storePlugin)
   await ctx.plugin(authPlugin, { workspacePath: WORKSPACE_PATH })
 
-  const services = ctx as unknown as Services
+  const webServer = requireService(ctx, 'webServer')
+  const systemPrompt = requireService(ctx, 'systemPrompt')
+  const customerStore = requireService(ctx, 'customerStore')
   let disposed = false
   const dispose = async () => {
     if (disposed) return
     disposed = true
     await ctx.fiber.dispose()
   }
-  cleanups.push(async () => {
+  registerCleanup(async () => {
     await dispose()
     rmSync(storageRoot, { recursive: true, force: true })
   })
   return {
-    port: services.webServer.port,
+    port: webServer.port,
     created,
     createdIn,
     ensured,
-    assemble: async (sessionId) => renderContextSnapshot(await services.systemPrompt.assemble(
-      sessionId === undefined ? undefined : { agent: { session: { id: sessionId } } },
+    assemble: async (sessionId) => renderContextSnapshot(await systemPrompt.assemble(
+      sessionId === undefined ? {} : { agent: asAgent(agentDouble(sessionId)) },
     )),
-    findById: customerId => services.customerStore.findById(customerId),
+    findById: customerId => customerStore.findById(customerId),
     dispose,
   }
 }
@@ -265,7 +255,7 @@ describe('customer login routes', () => {
     await ctx.plugin(storageDomain, { backend: 'json' })
     await ctx.plugin(SystemPrompt, {})
     await ctx.plugin(storePlugin)
-    cleanups.push(() => ctx.fiber.dispose())
+    registerCleanup(() => ctx.fiber.dispose())
     await expect(ctx.plugin(authPlugin, {})).rejects.toThrow(/workspacePath/)
     await expect(ctx.plugin(authPlugin, { workspacePath: 'relative/dir' })).rejects.toThrow(/workspacePath/)
   })

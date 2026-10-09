@@ -17,6 +17,9 @@
     backend: json
     routes:
       customer: sqlite
+# The tool allowlist and the native presentation that completes it are declared
+# per Agent scope by `plugins/tools/index.js`, not here: a security invariant
+# that a config field could turn off is not an invariant.
 - insert:
     - id: customer-service-store
       name: ./plugins/store/index.js
@@ -27,5 +30,7 @@
       name: ./plugins/auth/index.js
       config:
         workspacePath: !!js process.getBuiltinModule('node:path').resolve('customer-service')
+    - id: customer-service-tools
+      name: ./plugins/tools/index.js
     - id: customer-service-ui
       name: ./plugins/ui/index.js

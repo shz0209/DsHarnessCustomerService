@@ -13,13 +13,11 @@
  */
 import { randomBytes } from 'node:crypto'
 import { isAbsolute } from 'node:path'
+import { readJsonBody, registerJsonRoute, sendJson } from '../shared/http.js'
 import { TIER_LABELS } from '../shared/vocabulary.js'
 
 /** Cordis plugin name. */
 export const name = 'customer-service-auth'
-
-/** Route prefix. Every path below is absolute and outside the reserved `/api`. */
-export const ROUTE_PREFIX = '/customer-service'
 
 /** Required services: the HTTP router, the request-trust fence, Session
  * creation, the prompt-context registry, the Workspace registry, and the
@@ -30,9 +28,6 @@ export const inject = [
 
 /** Cookie carrying the login. Opaque; it never contains a Customer id. */
 const COOKIE_NAME = 'cs_session'
-
-/** Largest accepted request body, in bytes. Credentials are tiny. */
-const MAX_BODY_BYTES = 4096
 
 /** Prompt-context position. Sorted after the shipped delegation context (120). */
 const IDENTITY_CONTEXT_ORDER = 130
@@ -70,8 +65,24 @@ export function apply(ctx, config) {
      * @returns the Customer row, or `undefined` when nothing is bound.
      */
     forSession(sessionId) {
-      const customerId = boundCustomers.get(sessionId)
-      return customerId === undefined ? undefined : ctx.customerStore.findById(customerId)
+      return customerById(ctx, boundCustomers, sessionId)
+    },
+
+    /**
+     * Resolve the Customer a browser request is logged in as.
+     *
+     * This is the only identity a client-facing route may trust: the cookie is
+     * `HttpOnly`, so no request the model can compose carries a Customer id.
+     * @param req - the incoming request.
+     * @returns the login Session id and its Customer row, or `undefined` when
+     *   the request carries no live login.
+     */
+    forRequest(req) {
+      const token = readCookie(req, COOKIE_NAME)
+      const sessionId = token === undefined ? undefined : sessionsByToken.get(token)
+      if (sessionId === undefined) return undefined
+      const customer = customerById(ctx, boundCustomers, sessionId)
+      return customer === undefined ? undefined : { sessionId, customer }
     },
   })
 
@@ -89,16 +100,12 @@ export function apply(ctx, config) {
    * @param res - the response to write.
    */
   const current = (req, res) => {
-    const token = readCookie(req, COOKIE_NAME)
-    const sessionId = token === undefined ? undefined : sessionsByToken.get(token)
-    const customer = sessionId === undefined
-      ? undefined
-      : customerById(ctx, boundCustomers, sessionId)
-    if (customer === undefined || sessionId === undefined) {
+    const login = ctx.customerIdentity.forRequest(req)
+    if (login === undefined) {
       sendJson(res, 200, { loggedIn: false })
       return
     }
-    sendJson(res, 200, { loggedIn: true, ...publicCustomer(customer), sessionId })
+    sendJson(res, 200, { loggedIn: true, ...publicCustomer(login.customer), sessionId: login.sessionId })
   }
 
   /**
@@ -158,47 +165,10 @@ export function apply(ctx, config) {
     sendJson(res, 200, { ok: true })
   }
 
-  registerRoute(ctx, '/login', 'POST', login)
-  registerRoute(ctx, '/logout', 'POST', logout)
-  registerRoute(ctx, '/session', 'GET', current)
-  registerRoute(ctx, '/demo-accounts', 'GET', demoAccounts)
-}
-
-/**
- * Register one exact route behind the request-trust fence.
- *
- * The fence refuses a cross-origin caller (403) before the handler runs. It
- * also answers 401 for a missing browser session, which a login route must
- * ignore: the whole point is to be reachable before logging in.
- * @param ctx - plugin context carrying the HTTP router.
- * @param path - path below {@link ROUTE_PREFIX}.
- * @param method - the only HTTP method this route accepts.
- * @param handler - handler run once the fence and the method check pass.
- */
-function registerRoute(ctx, path, method, handler) {
-  const full = `${ROUTE_PREFIX}${path}`
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: full,
-    handler: async (req, res) => {
-      if (ctx.connection.requestRejection(req) === 403) {
-        sendJson(res, 403, { error: '请求来源不受信任' })
-        return
-      }
-      if (req.method !== method) {
-        res.setHeader('allow', method)
-        sendJson(res, 405, { error: `请使用 ${method}` })
-        return
-      }
-      try {
-        await handler(req, res)
-      } catch (error) {
-        ctx.logger.error(`customer-service-auth: ${method} ${full} failed: ${String(error)}`)
-        if (!res.headersSent) sendJson(res, 500, { error: '服务内部错误' })
-        else res.end()
-      }
-    },
-  }), `customer-service-auth: ${method} ${full}`)
+  registerJsonRoute(ctx, { label: name, path: '/login', method: 'POST', handler: login })
+  registerJsonRoute(ctx, { label: name, path: '/logout', method: 'POST', handler: logout })
+  registerJsonRoute(ctx, { label: name, path: '/session', method: 'GET', handler: current })
+  registerJsonRoute(ctx, { label: name, path: '/demo-accounts', method: 'GET', handler: demoAccounts })
 }
 
 /**
@@ -257,42 +227,4 @@ function readCookie(req, name) {
     return decodeURIComponent(segment.slice(at + 1).trim())
   }
   return undefined
-}
-
-/**
- * Read and parse a bounded JSON request body.
- * @param req - the incoming request.
- * @returns the parsed object, or `undefined` when the body is absent, too
- *   large, not JSON, or not a JSON object.
- */
-async function readJsonBody(req) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > MAX_BODY_BYTES) return undefined
-    chunks.push(chunk)
-  }
-  if (size === 0) return undefined
-  try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : undefined
-  } catch {
-    // A body that is not JSON cannot carry credentials, and the caller gets the
-    // same 400 as any other malformed request.
-    return undefined
-  }
-}
-
-/**
- * Write a JSON response.
- * @param res - the response to write.
- * @param status - the HTTP status code.
- * @param payload - the JSON-serializable body.
- */
-function sendJson(res, status, payload) {
-  res.statusCode = status
-  res.setHeader('content-type', 'application/json; charset=utf-8')
-  res.setHeader('cache-control', 'no-store')
-  res.end(JSON.stringify(payload))
 }

@@ -1,10 +1,10 @@
 /**
- * Browser half of the customer-service UI plugin (issues #3 and #4). Hand-written
- * in the closure factory form the Client module system loads (ADR-0006): no build
- * step, no `@deepseek-ai/dsh-*` import, `require` answers from the loader's
- * module table.
+ * Browser half of the customer-service UI plugin (issues #3, #4, and #5).
+ * Hand-written in the closure factory form the Client module system loads
+ * (ADR-0006): no build step, no `@deepseek-ai/dsh-*` import, `require` answers
+ * from the loader's module table.
  *
- * Two surfaces:
+ * Three surfaces:
  *   - `shell.overlay` carries a full-viewport mask while nobody is logged in, so
  *     the conversation is neither visible nor reachable, and carries the login
  *     form with the demo credentials; once a login is live it renders nothing.
@@ -15,6 +15,10 @@
  *     renders (see ADR-0007). The native navigation — session list, workspaces,
  *     settings — stops rendering with it, and while nobody is logged in the
  *     occupant renders nothing at all.
+ *   - `tool.call.toolview` keyed by `search_orders` is the order card (issue #5):
+ *     the Orders the running call matched, and the buttons that answer it. The
+ *     answer is the tool's return value, so a settled call renders from the
+ *     result the host logged and replays with no host state at all (ADR-0001).
  *
  * The login state lives in the `cs_session` cookie the host sets; this file
  * only ever reads the answer to `GET /customer-service/session`. The one piece
@@ -28,7 +32,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const { createPortal } = require('react-dom')
     const h = React.createElement
-    const { useCallback, useEffect, useState } = React
+    const { useCallback, useEffect, useRef, useState } = React
 
     /** Route prefix of the customer-service HTTP routes. */
     const ROUTE_PREFIX = '/customer-service'
@@ -40,6 +44,18 @@ window.__ModuleLoader__.load({
     const NETWORK_ERROR = '无法连接客服服务，请稍后重试'
     /** Shown when leaving failed, so a Customer is not left thinking they are out. */
     const SIGN_OUT_ERROR = '退出登录失败，请重试'
+    /** Wire tool name this file's order card occupies; must equal the host tool's name. */
+    const ORDER_TOOL_NAME = 'search_orders'
+    /** Order-card polling interval while the host has not published the question yet. */
+    const ORDER_POLL_INTERVAL_MS = 800
+    /** Order-card polls before it stops and says it could not load the question. */
+    const ORDER_POLL_ATTEMPTS = 15
+    /** Shown when the order card could not read the question from the host. */
+    const ORDER_QUESTION_ERROR = '订单卡片暂时无法加载，请让客服重新查询'
+    /** Shown once an answer is on its way, while the blocked tool call finishes. */
+    const ORDER_SUBMITTED = '已提交，等待客服回复…'
+    /** Shown for an order card whose call never produced a readable outcome. */
+    const ORDER_UNFINISHED = '订单查询未完成'
 
     // Copy is written in Chinese rather than routed through the harness's
     // locale mechanism: this directory is outside the client-copy gate, and the
@@ -295,6 +311,70 @@ window.__ModuleLoader__.load({
 .cs-signout--rail { inline-size: 100%; padding: 8px 0; font-size: 12px; }
 `
 
+    // The order card sits in the conversation, not in a themed frame column, so
+    // it paints with the same design tokens the surrounding transcript uses.
+    const ORDER_CSS = `
+.cs-order {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  color: var(--dsw-alias-label-primary);
+  font: 13px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.cs-order__title { font-weight: 600; }
+.cs-order__query { color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.cs-order__hint { color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.cs-order__error { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
+.cs-order__list { display: flex; flex-direction: column; gap: 8px; }
+.cs-order__item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+}
+.cs-order__item--selected {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent);
+}
+.cs-order__field { display: flex; gap: 8px; }
+.cs-order__label { flex: 0 0 4.5em; color: var(--dsw-alias-label-secondary); }
+.cs-order__value { flex: 1; min-inline-size: 0; word-break: break-word; }
+.cs-order__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cs-order__button {
+  padding: 6px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.cs-order__button:hover:enabled { background: var(--dsw-alias-interactive-bg-hover); }
+.cs-order__button:disabled { cursor: default; opacity: .55; }
+.cs-order__button--primary {
+  border-color: transparent;
+  background: var(--dsw-alias-state-business-primary);
+  color: #fff;
+}
+.cs-order__button--primary:hover:enabled {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 85%, #000);
+}
+.cs-order__badge {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
+}
+`
+
     /**
      * The login mask, and nothing once a Customer is signed in.
      * @returns the mask, or `null` for a signed-in Customer.
@@ -457,6 +537,264 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Flatten settled result content blocks into one line of copy.
+     * @param content - the result node's content blocks.
+     * @returns the text, or `''` when the blocks carry none.
+     */
+    function resultText(content) {
+      if (!Array.isArray(content)) return ''
+      return content
+        .map(item => (item !== null && typeof item === 'object' && item.type === 'text' ? item.text : ''))
+        .join('\n')
+        .trim()
+    }
+
+    /**
+     * Read one pending order question from the host.
+     *
+     * The candidates cannot ride the session log — an out-of-tree plugin
+     * cannot mint a session event — so the card fetches them from the route.
+     * The host publishes the question when the tool starts, a moment after the
+     * call reaches the browser, so a `404` means "not yet" and the poll waits.
+     * @param callId - the tool call the card belongs to.
+     * @param phase - the call's stage; only a running call has a live question.
+     * @returns the load state, and the query and candidate Orders once loaded.
+     */
+    function useOrderQuestion(callId, phase) {
+      const [question, setQuestion] = useState({ status: 'loading' })
+      useEffect(() => {
+        if (phase !== 'start') return undefined
+        let cancelled = false
+        const controller = new AbortController()
+        void (async () => {
+          const path = `/order-question?callId=${encodeURIComponent(callId)}`
+          for (let attempt = 0; attempt < ORDER_POLL_ATTEMPTS; attempt++) {
+            let answer
+            try {
+              answer = await requestJson(path, { signal: controller.signal })
+            } catch {
+              // The page is unloading or the host is unreachable; either way a
+              // retry cannot succeed, so the card stops rather than spinning.
+              if (!cancelled) setQuestion({ status: 'unavailable' })
+              return
+            }
+            if (cancelled) return
+            if (answer.ok && Array.isArray(answer.payload?.candidates)) {
+              setQuestion({
+                status: 'ready',
+                query: answer.payload.query ?? {},
+                candidates: answer.payload.candidates,
+              })
+              return
+            }
+            if (answer.status !== 404) {
+              setQuestion({ status: 'unavailable' })
+              return
+            }
+            await new Promise(resolve => setTimeout(resolve, ORDER_POLL_INTERVAL_MS))
+            if (cancelled) return
+          }
+          setQuestion({ status: 'unavailable' })
+        })()
+        return () => {
+          cancelled = true
+          controller.abort()
+        }
+      }, [callId, phase])
+      return question
+    }
+
+    /**
+     * Answer the pending order question for one call.
+     * @param callId - the tool call the answer belongs to.
+     * @returns the submit callback, whether a submit is in flight, and the last
+     *   failure to show. `orderId` is `null` for "none of these Orders".
+     */
+    function useOrderAnswer(callId) {
+      const [state, setState] = useState({ busy: false, error: '' })
+      // The request starts in the handler, never inside the updater: an updater
+      // must be pure, and React may call one twice — which would post the
+      // answer twice and paint the second (404) over the first one's success.
+      const busy = useRef(false)
+      const submit = useCallback(orderId => {
+        if (busy.current) return
+        busy.current = true
+        setState({ busy: true, error: '' })
+        void (async () => {
+          let answer
+          try {
+            answer = await requestJson('/order-question/answer', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ callId, orderId }),
+            })
+          } catch {
+            busy.current = false
+            setState({ busy: false, error: NETWORK_ERROR })
+            return
+          }
+          // A refused answer releases the buttons so the Customer can try
+          // again; an accepted one stays busy, because the card now waits for
+          // the blocked tool call to come back with the chosen Order.
+          if (answer.ok) return
+          busy.current = false
+          setState({ busy: false, error: answer.payload?.error ?? NETWORK_ERROR })
+        })()
+      }, [callId])
+      return { ...state, submit }
+    }
+
+    /** Amount as the Customer sees it; the host stores integer cents. */
+    function formatAmount(amountCents) {
+      return typeof amountCents === 'number' ? `¥${(amountCents / 100).toFixed(2)}` : ''
+    }
+
+    /**
+     * The stored offset-carrying timestamp as local wall-clock text.
+     * @param rentedAt - the ISO-8601 timestamp the host stored.
+     * @returns `YYYY-MM-DD HH:MM`, which is the rental time at the venue.
+     */
+    function formatRentedAt(rentedAt) {
+      return typeof rentedAt === 'string' ? rentedAt.slice(0, 16).replace('T', ' ') : ''
+    }
+
+    /**
+     * One labelled field of an Order.
+     * @param label - the Chinese field name.
+     * @param value - the already-formatted value.
+     * @returns the field row.
+     */
+    function orderField(label, value) {
+      return h('div', { className: 'cs-order__field', key: label },
+        h('span', { className: 'cs-order__label' }, label),
+        h('span', { className: 'cs-order__value' }, value),
+      )
+    }
+
+    /**
+     * The fields a Customer recognizes an Order by, plus its money and state.
+     * @param order - an Order as the host projected it, with its status label.
+     * @returns the field rows.
+     */
+    function orderFields(order) {
+      return [
+        orderField('租借地点', order.location),
+        orderField('租借时间', formatRentedAt(order.rentedAt)),
+        orderField('金额', formatAmount(order.amountCents)),
+        orderField('状态', order.statusLabel ?? ''),
+      ]
+    }
+
+    /** The query the host ran, as one line, or `null` when it had no filter. */
+    function queryLine(query) {
+      const parts = []
+      if (typeof query.location === 'string') parts.push(`地点：${query.location}`)
+      if (typeof query.rentedFrom === 'string') parts.push(`租借时间从 ${query.rentedFrom.slice(0, 10)}`)
+      if (typeof query.rentedTo === 'string') parts.push(`到 ${query.rentedTo.slice(0, 10)}`)
+      if (parts.length === 0) return null
+      return h('div', { className: 'cs-order__query' }, parts.join('，'))
+    }
+
+    /** A card that carries one line of copy and nothing to click. */
+    function orderNotice(text, className) {
+      return h('div', { className: className ?? 'cs-order', 'data-customer-service-order': 'notice' },
+        h('div', { className: 'cs-order__title' }, text),
+      )
+    }
+
+    /**
+     * The settled state, rendered from the result the host logged so a replayed
+     * Session shows the same card with no host state at all.
+     * @param block - the settled result node.
+     * @returns the confirmed Order, or why the call returned none.
+     */
+    function OrderResult(block) {
+      const meta = block.meta
+      const outcome = meta !== null && typeof meta === 'object' ? meta.outcome : undefined
+      if (outcome === 'selected' && meta.order !== undefined) {
+        return h('div', { className: 'cs-order', 'data-customer-service-order': 'confirmed' },
+          h('div', { className: 'cs-order__badge' }, '客户已确认'),
+          h('div', { className: 'cs-order__list' },
+            h('div', { className: 'cs-order__item cs-order__item--selected' }, ...orderFields(meta.order)),
+          ),
+        )
+      }
+      if (outcome === 'declined') {
+        return orderNotice('客户没有选中这次查到的订单，请再问一次大概的时间或地点')
+      }
+      if (outcome === 'none') return orderNotice('没有查到符合条件的订单')
+      // A failed or interrupted call carries no outcome; its own result text is
+      // the only honest thing to show.
+      const text = resultText(block.content)
+      return h('div', { className: 'cs-order', 'data-customer-service-order': 'failed' },
+        h('div', { className: 'cs-order__title' }, ORDER_UNFINISHED),
+        text === '' ? null : h('div', { className: 'cs-order__error' }, text),
+      )
+    }
+
+    /**
+     * The order card for one `search_orders` call: the Orders the call matched,
+     * and the Customer's answer to them.
+     *
+     * Every hook runs before any branch, so the card can move from the running
+     * stage to the settled one without changing its hook order.
+     * @param props - the slot owner's share: the call identity and its stage.
+     * @returns the card.
+     */
+    function OrderCard(props) {
+      const { callId, phase, block } = props
+      const question = useOrderQuestion(callId, phase)
+      const answer = useOrderAnswer(callId)
+
+      if (phase === 'result') return OrderResult(block)
+      if (phase === 'preparing' || question.status === 'loading') {
+        return orderNotice('正在查询订单…')
+      }
+      if (question.status === 'unavailable') {
+        return h('div', { className: 'cs-order', 'data-customer-service-order': 'unavailable' },
+          h('div', { className: 'cs-order__title' }, ORDER_QUESTION_ERROR),
+        )
+      }
+
+      const candidates = question.candidates
+      const choose = (label, orderId, primary) => h('button', {
+        type: 'button',
+        key: label,
+        className: primary ? 'cs-order__button cs-order__button--primary' : 'cs-order__button',
+        disabled: answer.busy,
+        onClick: () => answer.submit(orderId),
+      }, label)
+
+      // One match is the demo's opening question, answered yes or no; several
+      // means the Customer has to say which one, and "none of them" is the
+      // honest third answer either way.
+      const items = candidates.map(candidate => h('div', {
+        key: candidate.orderId,
+        className: 'cs-order__item',
+      },
+      ...orderFields(candidate),
+      candidates.length === 1
+        ? h('div', { className: 'cs-order__actions' },
+          choose('是，就是这一笔', candidate.orderId, true),
+          choose('不是', null, false),
+        )
+        : h('div', { className: 'cs-order__actions' }, choose('选这笔', candidate.orderId, false)),
+      ))
+
+      return h('div', { className: 'cs-order', 'data-customer-service-order': 'pending' },
+        h('div', { className: 'cs-order__title' },
+          candidates.length === 1 ? '请问您咨询的是这个订单吗？' : `查到 ${candidates.length} 笔订单，请选择要咨询的那一笔`),
+        queryLine(question.query),
+        h('div', { className: 'cs-order__list' }, ...items),
+        candidates.length > 1
+          ? h('div', { className: 'cs-order__actions' }, choose('都不是', null, false))
+          : null,
+        answer.error === '' ? null : h('div', { className: 'cs-order__error', role: 'alert' }, answer.error),
+        answer.busy ? h('div', { className: 'cs-order__hint' }, ORDER_SUBMITTED) : null,
+      )
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
@@ -469,6 +807,15 @@ window.__ModuleLoader__.load({
             style.remove()
           }
         }, 'customer-service-ui: sidebar styles')
+        ctx.effect(() => {
+          const style = document.createElement('style')
+          style.dataset.customerService = 'order'
+          style.textContent = ORDER_CSS
+          document.head.append(style)
+          return () => {
+            style.remove()
+          }
+        }, 'customer-service-ui: order card styles')
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay',
           id: 'customer-service.gate',
@@ -481,6 +828,12 @@ window.__ModuleLoader__.load({
           name: 'sidebar',
           priority: -1,
         }, CustomerSidebar))
+        // Keyed by the wire tool name: the key IS the dispatch value, so a
+        // rename on either side would silently fall back to the generic row.
+        ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
+          name: 'tool.call.toolview',
+          key: ORDER_TOOL_NAME,
+        }, OrderCard))
       },
     }
   },

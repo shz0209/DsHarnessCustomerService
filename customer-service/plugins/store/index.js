@@ -1,10 +1,12 @@
 /**
- * Customer Service store: the Customer table, its seeded demo accounts, and the
- * `customerStore` service the other host plugins read it through.
+ * Customer Service store: the Customer and Order tables, their seeded demo
+ * rows, and the `customerStore` service the other host plugins read them
+ * through.
  *
  * This plugin owns the database. It is the only place that opens a storage
  * domain, so the table layout and the credentials never leak past the service
- * surface. Order data joins the same domain in a later ticket.
+ * surface. Every read of an Order is scoped by `customerId`, which the caller
+ * takes from the login binding rather than from a tool argument (ADR-0004).
  *
  * Imports `zod` because a storage-domain table schema must be a zod schema.
  * The repository root has `zod`, so Node resolves it from here even though this
@@ -12,16 +14,19 @@
  */
 import { z } from 'zod'
 import { hashPassword, verifyPassword } from './passwords.js'
-import { TIERS } from '../shared/vocabulary.js'
+import { ORDER_STATUSES, TIERS } from '../shared/vocabulary.js'
 
 /** Cordis plugin name. */
 export const name = 'customer-service-store'
 
-/** Required service: the storage-domain facility that opens the table. */
+/** Required service: the storage-domain facility that opens the tables. */
 export const inject = ['storageDomain']
 
-/** Table name inside the `customer` domain. */
+/** Customer table name inside the `customer` domain. */
 export const CUSTOMERS_TABLE = 'customers'
+
+/** Order table name inside the `customer` domain. */
+export const ORDERS_TABLE = 'orders'
 
 /** One Customer row. `customerId` is the key, so it is also stored in the value. */
 const customerRecord = z.object({
@@ -30,6 +35,22 @@ const customerRecord = z.object({
   passwordHash: z.string().min(1),
   tier: z.enum(TIERS),
   isAdmin: z.boolean(),
+})
+
+/**
+ * One Order row. `orderId` is the key, so it is also stored in the value.
+ *
+ * `amountCents` is an integer so a demo about money never rounds, and
+ * `rentedAt` is an offset-carrying ISO-8601 timestamp so the card shows the
+ * rental time the Customer experienced rather than one the browser guesses.
+ */
+const orderRecord = z.object({
+  orderId: z.string().min(1),
+  customerId: z.string().min(1),
+  location: z.string().min(1),
+  amountCents: z.number().int().min(0),
+  rentedAt: z.string().min(1),
+  status: z.enum(ORDER_STATUSES),
 })
 
 /**
@@ -43,7 +64,10 @@ const customerRecord = z.object({
 export const customerDomain = {
   name: 'customer',
   version: 1,
-  tables: { [CUSTOMERS_TABLE]: { valueSchema: customerRecord } },
+  tables: {
+    [CUSTOMERS_TABLE]: { valueSchema: customerRecord },
+    [ORDERS_TABLE]: { valueSchema: orderRecord },
+  },
 }
 
 /**
@@ -59,14 +83,43 @@ export const DEMO_ACCOUNTS = [
 ]
 
 /**
- * Open the Customer table, seed the demo accounts, and publish `customerStore`.
+ * Two demo Orders per demo account: one still out with the Customer, one
+ * already returned. The in-progress Order is the more recent of the two, so a
+ * query with no filter lands on it — the demo's opening question.
+ *
+ * The locations share the vocabulary a Customer would actually use ("购物中心",
+ * "地铁站") so a fuzzy query has something to match, and no two Orders of one
+ * Customer sit at the same place or time.
+ */
+export const DEMO_ORDERS = [
+  { orderId: 'ord-silver-1', customerId: 'cust-silver', location: '万象城购物中心 B1 层服务台', amountCents: 300, rentedAt: '2026-10-08T19:24:00+08:00', status: 'in_progress' },
+  { orderId: 'ord-silver-2', customerId: 'cust-silver', location: '深圳北站候车厅 3 号点位', amountCents: 1200, rentedAt: '2026-09-21T08:05:00+08:00', status: 'returned' },
+  { orderId: 'ord-gold-1', customerId: 'cust-gold', location: '海岸城购物中心 4 楼电梯口', amountCents: 400, rentedAt: '2026-10-07T13:40:00+08:00', status: 'in_progress' },
+  { orderId: 'ord-gold-2', customerId: 'cust-gold', location: '科技园地铁站 A 出口', amountCents: 600, rentedAt: '2026-09-30T21:12:00+08:00', status: 'returned' },
+  { orderId: 'ord-platinum-1', customerId: 'cust-platinum', location: '华强北电子市场 2 号门', amountCents: 200, rentedAt: '2026-10-09T10:15:00+08:00', status: 'in_progress' },
+  { orderId: 'ord-platinum-2', customerId: 'cust-platinum', location: '深圳湾公园欢乐海岸入口', amountCents: 900, rentedAt: '2026-09-12T16:48:00+08:00', status: 'returned' },
+  { orderId: 'ord-black-gold-1', customerId: 'cust-black-gold', location: '宝安国际机场 T3 到达厅', amountCents: 500, rentedAt: '2026-10-06T22:30:00+08:00', status: 'in_progress' },
+  { orderId: 'ord-black-gold-2', customerId: 'cust-black-gold', location: '前海壹方城 B2 停车场', amountCents: 1500, rentedAt: '2026-08-28T11:20:00+08:00', status: 'returned' },
+]
+
+/**
+ * Open the Customer and Order tables, seed the demo rows, and publish
+ * `customerStore`.
  * @param ctx - plugin context carrying the storage-domain facility.
  */
 export async function apply(ctx) {
   const domain = await ctx.storageDomain.open(customerDomain)
   ctx.effect(() => () => domain.close(), 'customer-service-store: close domain')
-  const table = domain.table(CUSTOMERS_TABLE)
-  await seed(table)
+  const customers = domain.table(CUSTOMERS_TABLE)
+  const orders = domain.table(ORDERS_TABLE)
+  await seed(customers, DEMO_ACCOUNTS, 'customerId', account => ({
+    customerId: account.customerId,
+    accountName: account.accountName,
+    passwordHash: hashPassword(account.password),
+    tier: account.tier,
+    isAdmin: account.isAdmin,
+  }))
+  await seed(orders, DEMO_ORDERS, 'orderId', order => ({ ...order }))
 
   ctx.provide('customerStore', {
     /**
@@ -75,7 +128,7 @@ export async function apply(ctx) {
      * @returns the Customer row, or `undefined` when no such Customer exists.
      */
     findById(customerId) {
-      return table.get(customerId)
+      return customers.get(customerId)
     },
 
     /**
@@ -86,7 +139,7 @@ export async function apply(ctx) {
      *   account name or the password is wrong. The caller cannot tell which.
      */
     authenticate(accountName, password) {
-      const customer = findByAccountName(table, accountName)
+      const customer = findByAccountName(customers, accountName)
       if (customer === undefined) return undefined
       if (!verifyPassword(password, customer.passwordHash)) return undefined
       return customer
@@ -105,26 +158,56 @@ export async function apply(ctx) {
         isAdmin: account.isAdmin,
       }))
     },
+
+    /**
+     * Search one Customer's own Orders, most recently rented first.
+     *
+     * The `customerId` scoping is the isolation guarantee: an Order belonging
+     * to anyone else is unreachable through this method, whatever the filter.
+     * `location` matches by substring containment, the fuzzy match a Customer
+     * recalling "那个购物中心" needs. `rentedFrom`/`rentedTo` are compared as
+     * instants, so an offset-carrying ISO-8601 bound from any zone orders
+     * correctly against the stored timestamps; the model-facing tool
+     * normalizes and validates them before they arrive (ADR-0004).
+     * @param customerId - the Customer whose Orders may be returned.
+     * @param filter - `location` substring, and inclusive `rentedFrom`/
+     *   `rentedTo` instants; an absent field does not narrow the search, so the
+     *   empty filter matches every Order this Customer owns.
+     * @returns the matching Order rows, most recent `rentedAt` first.
+     */
+    searchOrders(customerId, filter) {
+      const from = filter.rentedFrom === undefined ? undefined : Date.parse(filter.rentedFrom)
+      const to = filter.rentedTo === undefined ? undefined : Date.parse(filter.rentedTo)
+      const matches = []
+      for (const [, order] of orders.entries()) {
+        if (order.customerId !== customerId) continue
+        if (filter.location !== undefined && !order.location.includes(filter.location)) continue
+        const rentedAt = Date.parse(order.rentedAt)
+        if (from !== undefined && rentedAt < from) continue
+        if (to !== undefined && rentedAt > to) continue
+        matches.push(order)
+      }
+      return matches.sort((left, right) => Date.parse(right.rentedAt) - Date.parse(left.rentedAt))
+    },
   })
 }
 
 /**
- * Write the demo accounts that are not in the table yet.
+ * Write the demo rows that are not in the table yet.
  *
  * Seeding is idempotent and never overwrites: a row that already exists keeps
- * its hash, so restarting the server does not invalidate a stored password.
- * @param table - the open `customers` table.
+ * its stored value, so restarting the server neither invalidates a stored
+ * password hash nor discards an Order the demo has since modified.
+ * @param table - the open table to seed.
+ * @param demos - the demo rows.
+ * @param keyField - the field of the stored record that is the table key.
+ * @param project - builds the stored record from one demo row.
  */
-async function seed(table) {
-  for (const account of DEMO_ACCOUNTS) {
-    if (table.get(account.customerId) !== undefined) continue
-    await table.put(account.customerId, {
-      customerId: account.customerId,
-      accountName: account.accountName,
-      passwordHash: hashPassword(account.password),
-      tier: account.tier,
-      isAdmin: account.isAdmin,
-    })
+async function seed(table, demos, keyField, project) {
+  for (const demo of demos) {
+    const record = project(demo)
+    if (table.get(record[keyField]) !== undefined) continue
+    await table.put(record[keyField], record)
   }
 }
 
