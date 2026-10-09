@@ -1,6 +1,6 @@
 /**
- * Browser half of the customer-service UI plugin (issues #3, #4, #5, #6, #7).
- * Hand-written in the closure factory form the Client module system loads
+ * Browser half of the customer-service UI plugin (issues #3, #4, #5, #6, #7,
+ * #8). Hand-written in the closure factory form the Client module system loads
  * (ADR-0006): no build step, no `@deepseek-ai/dsh-*` import, `require` answers
  * from the loader's module table.
  *
@@ -22,6 +22,11 @@
  *   - `tool.call.toolview` keyed by `manual_return` is the 人工还宝 card (issue
  *     #7): the Order the action closed, with its 归还时间, so the Customer sees
  *     the change on the card as well as hearing it from the Agent.
+ *   - `tool.call.toolview` keyed by `refund` is the 退款 card (issue #8), the
+ *     same way: the Order the action marked, with its 退款时间. An Order whose
+ *     money has been returned carries the 已退款 badge on every card it appears
+ *     on — the refund is a mark beside the status, not a status, so 已归还
+ *     stays where it is.
  *
  * And one thing that is not a surface: the opening (issue #6). A Customer who
  * has just logged in has nothing to say yet, so this file asks the host to
@@ -56,12 +61,24 @@ window.__ModuleLoader__.load({
     const ORDER_TOOL_NAME = 'search_orders'
     /** Wire tool name of 人工还宝, whose settled call renders the closed Order. */
     const MANUAL_RETURN_TOOL_NAME = 'manual_return'
-    /** Shown while a 人工还宝 call is still running. */
-    const MANUAL_RETURN_RUNNING = '正在办理人工还宝…'
-    /** Shown for a 人工还宝 call that never produced a readable Order. */
-    const MANUAL_RETURN_UNFINISHED = '人工还宝未完成'
-    /** The badge a closed Order's card carries. */
-    const MANUAL_RETURN_DONE = '人工还宝已完成'
+    /** Wire tool name of 退款, whose settled call renders the marked Order. */
+    const REFUND_TOOL_NAME = 'refund'
+    /** Everything the 人工还宝 card says, beside the Order it shows. */
+    const MANUAL_RETURN_CARD = {
+      kind: 'returned',
+      running: '正在办理人工还宝…',
+      unfinished: '人工还宝未完成',
+      badge: '人工还宝已完成',
+    }
+    /** The same, for the 退款 card. */
+    const REFUND_CARD = {
+      kind: 'refunded',
+      running: '正在办理退款…',
+      unfinished: '退款未完成',
+      badge: '退款已完成',
+    }
+    /** The badge a refunded Order carries on every card it appears on. */
+    const REFUNDED_BADGE = '已退款'
     /** Order-card polling interval while the host has not published the question yet. */
     const ORDER_POLL_INTERVAL_MS = 800
     /** Order-card polls before it stops and says it could not load the question. */
@@ -440,6 +457,12 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-state-business-primary);
   font-size: 12px;
 }
+/* The refund mark is a fact about the money, not an action that just happened,
+   so it is the quiet grey badge rather than the primary-tinted one. */
+.cs-order__badge--refund {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
 `
 
     /**
@@ -743,7 +766,8 @@ window.__ModuleLoader__.load({
      * The fields a Customer recognizes an Order by, plus its money and state.
      *
      * 归还时间 appears once the Order carries one, which is how a Customer sees
-     * that a 人工还宝 really closed it rather than only saying so.
+     * that a 人工还宝 really closed it rather than only saying so; 退款时间 does
+     * the same for a 退款, beside a status that the refund left alone.
      * @param order - an Order as the host projected it, with its status label.
      * @returns the field rows.
      */
@@ -754,7 +778,32 @@ window.__ModuleLoader__.load({
         orderField('金额', formatAmount(order.amountCents)),
         orderField('状态', order.statusLabel ?? ''),
         ...(typeof order.returnedAt === 'string' ? [orderField('归还时间', formatStamp(order.returnedAt))] : []),
+        ...(typeof order.refundedAt === 'string' ? [orderField('退款时间', formatStamp(order.refundedAt))] : []),
       ]
+    }
+
+    /**
+     * The 已退款 badge, for a card showing an Order whose money has been
+     * returned. Absent for every other Order.
+     * @param order - an Order as the host projected it.
+     * @returns the badge, or `null`.
+     */
+    function refundBadge(order) {
+      if (typeof order.refundedAt !== 'string') return null
+      return h('span', {
+        className: 'cs-order__badge cs-order__badge--refund',
+        'data-customer-service-refund': '',
+      }, REFUNDED_BADGE)
+    }
+
+    /**
+     * One Order as the card shows it: its fields, and the 已退款 mark when the
+     * money is back.
+     * @param order - an Order as the host projected it.
+     * @returns the rows one `cs-order__item` holds.
+     */
+    function orderBody(order) {
+      return [...orderFields(order), refundBadge(order)]
     }
 
     /** The query the host ran, as one line, or `null` when it had no filter. */
@@ -785,7 +834,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'cs-order', 'data-customer-service-order': kind },
         h('div', { className: 'cs-order__badge' }, badge),
         h('div', { className: 'cs-order__list' },
-          h('div', { className: 'cs-order__item cs-order__item--selected' }, ...orderFields(order)),
+          h('div', { className: 'cs-order__item cs-order__item--selected' }, ...orderBody(order)),
         ),
       )
     }
@@ -864,7 +913,7 @@ window.__ModuleLoader__.load({
         key: candidate.orderId,
         className: 'cs-order__item',
       },
-      ...orderFields(candidate),
+      ...orderBody(candidate),
       candidates.length === 1
         ? h('div', { className: 'cs-order__actions' },
           choose('是，就是这一笔', candidate.orderId, true),
@@ -887,21 +936,20 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The settled state of one 人工还宝 call: the Order as the host left it.
+     * The settled state of one action call: the Order as the host left it.
      *
      * Like the order card, this renders from the result the host logged — the
      * Order it returned is persisted with the call, status label included — so a
-     * replayed Session shows the same closed Order with no host state at all.
+     * replayed Session shows the same written Order with no host state at all.
+     * @param copy - the action's card copy.
      * @param block - the settled result node.
-     * @returns the closed Order, or why the call returned none.
+     * @returns the written Order, or why the call returned none.
      */
-    function manualReturnResult(block) {
+    function actionResult(copy, block) {
       const meta = block.meta
       const order = meta !== null && typeof meta === 'object' ? meta.order : undefined
-      if (order !== null && typeof order === 'object') {
-        return settledOrderCard('returned', MANUAL_RETURN_DONE, order)
-      }
-      return unreadableCallCard(MANUAL_RETURN_UNFINISHED, block)
+      if (order !== null && typeof order === 'object') return settledOrderCard(copy.kind, copy.badge, order)
+      return unreadableCallCard(copy.unfinished, block)
     }
 
     /**
@@ -914,8 +962,20 @@ window.__ModuleLoader__.load({
      * @returns the card.
      */
     function ManualReturnCard(props) {
-      if (props.phase !== 'result') return orderNotice(MANUAL_RETURN_RUNNING)
-      return manualReturnResult(props.block)
+      if (props.phase !== 'result') return orderNotice(MANUAL_RETURN_CARD.running)
+      return actionResult(MANUAL_RETURN_CARD, props.block)
+    }
+
+    /**
+     * The card for one 退款 call, exactly as the 人工还宝 card works. The Order
+     * it shows carries the 已退款 badge, because the money came back while the
+     * status stayed 已归还.
+     * @param props - the slot owner's share: the call's stage and its result.
+     * @returns the card.
+     */
+    function RefundCard(props) {
+      if (props.phase !== 'result') return orderNotice(REFUND_CARD.running)
+      return actionResult(REFUND_CARD, props.block)
     }
 
     return {
@@ -961,6 +1021,10 @@ window.__ModuleLoader__.load({
           name: 'tool.call.toolview',
           key: MANUAL_RETURN_TOOL_NAME,
         }, ManualReturnCard))
+        ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
+          name: 'tool.call.toolview',
+          key: REFUND_TOOL_NAME,
+        }, RefundCard))
       },
     }
   },

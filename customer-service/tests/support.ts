@@ -21,6 +21,8 @@ export interface StoredOrder {
   readonly status: string
   /** The return time, present only once the Order has been closed. */
   readonly returnedAt?: string
+  /** The refund time, present only once the Order's money has been returned. */
+  readonly refundedAt?: string
 }
 
 /** The Customer and Order service published by `plugins/store`. */
@@ -51,6 +53,15 @@ export interface CustomerStore {
    *   Customer owns no such Order and nothing was written.
    */
   markReturned(customerId: string, orderId: string, returnedAt: string): Promise<StoredOrder | undefined>
+  /**
+   * Mark one of a Customer's own Orders refunded, leaving its status alone.
+   * @param customerId - the owning Customer, never a caller-supplied value.
+   * @param orderId - the Order number.
+   * @param refundedAt - the refund time, an offset-carrying ISO-8601 stamp.
+   * @returns the stored Order as it now stands, or `undefined` when this
+   *   Customer owns no such Order and nothing was written.
+   */
+  markRefunded(customerId: string, orderId: string, refundedAt: string): Promise<StoredOrder | undefined>
 }
 
 declare module '@deepseek-ai/cordis' {

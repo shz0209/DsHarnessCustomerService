@@ -21,7 +21,7 @@ A Customer whose account carries an admin flag, used only for the back-office te
 
 **Order** (订单):
 One power bank rental: a customer takes a power bank from a location and is expected to return it to a location.
-Carries 订单号, 金额, 租借时间, 租借地点, customerId and status; a closed Order may also carry 归还时间. A Customer may have many Orders.
+Carries 订单号, 金额, 租借时间, 租借地点, customerId and status; a closed Order may also carry 归还时间, and a refunded one 退款时间. A Customer may have many Orders.
 
 **Order status** (订单状态):
 `进行中` (in progress) — the power bank is out with the Customer.
@@ -33,6 +33,9 @@ The same field: the moment the power bank left the location. The two names are u
 
 **归还时间** (return time):
 The moment the power bank came back, recorded when an Order becomes `已归还`. It is there only when the return was recorded: an Order may be `已归还` without one.
+
+**退款时间** (refund time):
+The moment the money went back, recorded when an Order is refunded. It is the Order's 已退款 mark, and it says nothing about the power bank: a refunded Order keeps whatever status it had.
 
 **租借地点** (rental location):
 The location a power bank was taken from. Also what the back-office form calls 地址.

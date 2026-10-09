@@ -46,7 +46,8 @@ const customerRecord = z.object({
  * rental time the Customer experienced rather than one the browser guesses.
  * `returnedAt` is the same kind of stamp, written when an Order is closed;
  * seeded Orders that arrive 已归还 carry none, because no return was recorded
- * for them.
+ * for them. `refundedAt` is the refund mark, written beside the status rather
+ * than into it.
  */
 const orderRecord = z.object({
   orderId: z.string().min(1),
@@ -56,6 +57,7 @@ const orderRecord = z.object({
   rentedAt: z.string().min(1),
   status: z.enum(ORDER_STATUSES),
   returnedAt: z.string().min(1).optional(),
+  refundedAt: z.string().min(1).optional(),
 })
 
 /**
@@ -239,6 +241,28 @@ export async function apply(ctx) {
       // Spread first so the stored field order is preserved: a rewrite that only
       // adds the return time is what the grant's change reading expects.
       const updated = { ...order, status: 'returned', returnedAt }
+      await orders.put(orderId, updated)
+      return updated
+    },
+
+    /**
+     * Mark one of a Customer's own Orders refunded, recording when.
+     *
+     * The whole Order amount is what a refund returns, so the amount is not a
+     * parameter: the mark says the money went back, and the row already says how
+     * much. The status is deliberately left alone — 物 and 钱 are two things, so
+     * a refunded rental stays 已归还 (ADR-0009's reading covers this new field
+     * like any other).
+     * @param customerId - the Customer whose Order may be written.
+     * @param orderId - the Order number.
+     * @param refundedAt - the refund time, an offset-carrying ISO-8601 stamp.
+     * @returns the stored Order as it now stands, or `undefined` when this
+     *   Customer owns no such Order and nothing was written.
+     */
+    async markRefunded(customerId, orderId, refundedAt) {
+      const order = orders.get(orderId)
+      if (order === undefined || order.customerId !== customerId) return undefined
+      const updated = { ...order, refundedAt }
       await orders.put(orderId, updated)
       return updated
     },

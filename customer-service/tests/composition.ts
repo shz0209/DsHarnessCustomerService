@@ -68,6 +68,8 @@ export interface Booted {
   order(customerId: string, orderId: string): StoredOrder | undefined
   /** Close one Order through the store, as the back office does. */
   markReturned(customerId: string, orderId: string, returnedAt: string): Promise<StoredOrder | undefined>
+  /** Mark one Order refunded through the store, as the refund tool does. */
+  markRefunded(customerId: string, orderId: string, refundedAt: string): Promise<StoredOrder | undefined>
   /** Run one tool call as `caller`. */
   execute(name: string, args: unknown, caller: Agent, signal: AbortSignal): Promise<ToolExecutionResult>
   /** What one Agent's model would be offered: its tool names and section names. */
@@ -213,6 +215,7 @@ export async function boot(options: BootOptions = {}): Promise<Booted> {
     searchOrders: (customerId, filter = {}) => customerStore.searchOrders(customerId, filter),
     order: (customerId, orderId) => customerStore.findOrder(customerId, orderId),
     markReturned: (customerId, orderId, returnedAt) => customerStore.markReturned(customerId, orderId, returnedAt),
+    markRefunded: (customerId, orderId, refundedAt) => customerStore.markRefunded(customerId, orderId, refundedAt),
     execute: (name, args, caller, signal) => runtime.execute({
       callId: ToolCallId('call-1'), name, arguments: args, agent: caller, signal,
     }),

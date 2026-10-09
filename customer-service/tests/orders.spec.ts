@@ -21,7 +21,7 @@ const silver = demoAccount('silver')
 const gold = demoAccount('gold')
 
 /** Every tool this deployment allows, in the order the registry lists them. */
-const ALLOWED = ['search_orders', 'validate_manual_return', 'manual_return']
+const ALLOWED = ['search_orders', 'validate_manual_return', 'manual_return', 'validate_refund', 'refund']
 
 /** The same set as the assembled prompt offers it: a tool list reads by name. */
 const ALLOWED_BY_NAME = [...ALLOWED].sort()
@@ -135,7 +135,7 @@ describe('searchOrders', () => {
 })
 
 describe('the tool allowlist', () => {
-  it('shows an Agent this one tool and nothing else', async () => {
+  it('shows an Agent the allowed tools and nothing else', async () => {
     const app = await boot()
     const caller = await app.agent('session-1')
     expect(app.ctx.tools.schemas(caller).map(schema => schema.name)).toEqual(ALLOWED)

@@ -16,9 +16,10 @@
  * answer back; the tool's return value is the Order the Customer picked, which
  * keeps "model-visible ⟺ logged" true for free (ADR-0001).
  *
- * 人工还宝 arrives as two more tools rather than one: 校验 decides and issues
- * the grant, the action spends it (ADR-0002). They are built in `manual-return.js`
- * and published here with everything else, so one allowlist governs them all.
+ * 人工还宝 and 退款 each arrive as two tools rather than one: 校验 decides and
+ * issues the grant, the action spends it (ADR-0002). They are built in
+ * `manual-return.js` and `refund.js` and published here with everything else,
+ * so one allowlist governs them all.
  */
 import { createGrants } from '../shared/grants.js'
 import { readJsonBody, registerJsonRoute, sendJson } from '../shared/http.js'
@@ -26,6 +27,7 @@ import { ORDER_SCHEMA, orderLine, publicOrder } from '../shared/orders.js'
 import { DEMO_ZONE_OFFSET, inDemoZone } from '../shared/time.js'
 import { ORDER_STATUS_LABELS } from '../shared/vocabulary.js'
 import { MANUAL_RETURN_TOOLS, manualReturnTools } from './manual-return.js'
+import { REFUND_TOOLS, refundTools } from './refund.js'
 
 /** Cordis plugin name. */
 export const name = 'customer-service-tools'
@@ -40,9 +42,8 @@ export const inject = ['tools', 'agents', 'customerIdentity', 'customerStore', '
 export const SEARCH_ORDERS_TOOL = 'search_orders'
 
 /** The only tools any agent of this deployment may see or call: querying an
- * Order, and the 校验 + action pair that returns one by hand. The refund pair
- * (issue #8) joins them here. */
-export const ALLOWED_TOOLS = [SEARCH_ORDERS_TOOL, ...MANUAL_RETURN_TOOLS]
+ * Order, and one 校验 + action pair per service action — 人工还宝 and 退款. */
+export const ALLOWED_TOOLS = [SEARCH_ORDERS_TOOL, ...MANUAL_RETURN_TOOLS, ...REFUND_TOOLS]
 
 /** Argument names `search_orders` accepts. Anything else is rejected, not ignored. */
 const PARAMETER_NAMES = ['location', 'rentedFrom', 'rentedTo']
@@ -246,10 +247,10 @@ export function apply(ctx) {
 
   ctx.effect(() => ctx.tools.register(definition), 'customer-service-tools: search_orders')
 
-  // 校验 grants live here, in the process that runs both halves of 人工还宝
-  // (ADR-0002; ADR-0009 on why they are not persisted).
+  // 校验 grants live here, in the process that runs both halves of every action
+  // that spends one (ADR-0002; ADR-0009 on why they are not persisted).
   const grants = createGrants()
-  for (const tool of manualReturnTools(ctx, grants)) {
+  for (const tool of [...manualReturnTools(ctx, grants), ...refundTools(ctx, grants)]) {
     ctx.effect(() => ctx.tools.register(tool), `customer-service-tools: ${tool.name}`)
   }
 

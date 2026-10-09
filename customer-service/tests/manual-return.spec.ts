@@ -436,7 +436,7 @@ describe('the tools this issue adds to the allowlist', () => {
     const offered = await app.offered(caller)
     expect(offered.tools).toContain('validate_manual_return')
     expect(offered.tools).toContain('manual_return')
-    for (const name of ['refund', 'run_code', 'bash', 'subagent']) {
+    for (const name of ['refund_everything', 'run_code', 'bash', 'subagent']) {
       expect(offered.tools).not.toContain(name)
       const outcome = await run(app, caller, name, { orderId: ORDER })
       expect(outcome.isError).toBe(true)
