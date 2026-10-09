@@ -105,8 +105,8 @@ function candidateOrder(order) {
  * Validate and normalize the model's arguments into a store filter.
  *
  * Validation belongs here, at the model boundary: the store receives a filter
- * it can compare directly. A date-only bound means that whole UTC day, so
- * "9月21日" covers an Order rented at 08:05+08:00 on it.
+ * it can compare directly. Every bound comes back as an ISO-8601 instant in
+ * {@link DEMO_ZONE_OFFSET}, so "9月21日" covers that whole Beijing day.
  * @param args - the parsed arguments from the model.
  * @returns `location` (a trimmed substring) and inclusive ISO-8601 instants,
  *   each present only when the model supplied it.
@@ -139,11 +139,11 @@ function parseFilter(args) {
 }
 
 /**
- * Normalize one time bound to a full ISO-8601 instant.
- * @param value - the model's value, a date or date-time.
+ * Normalize one time bound to a full ISO-8601 instant in this deployment's zone.
+ * @param value - the model's value: a date, a date-time, or either with an offset.
  * @param field - the argument name, for the error message.
  * @param endOfDay - the clock time a date-only value expands to.
- * @returns the instant as an ISO-8601 UTC string.
+ * @returns the instant as ISO-8601 carrying {@link DEMO_ZONE_OFFSET}.
  * @throws {TypeError} when the value is not a string, or names no real instant.
  */
 function parseInstant(value, field, endOfDay) {
@@ -152,12 +152,47 @@ function parseInstant(value, field, endOfDay) {
   }
   const trimmed = value.trim()
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
-  const instant = Date.parse(dateOnly ? `${trimmed}T${endOfDay}Z` : trimmed)
+  const instant = Date.parse(dateOnly
+    ? `${trimmed}T${endOfDay}${DEMO_ZONE_OFFSET}`
+    : qualify(trimmed))
   if (!Number.isFinite(instant)) {
     throw new TypeError(`${field} 无法识别为时间：${trimmed}。请用 ISO-8601，例如 2026-09-21T08:05:00+08:00。`)
   }
-  return new Date(instant).toISOString()
+  return inDemoZone(instant)
 }
+
+/**
+ * Give an unqualified date-time this deployment's zone. A value that already
+ * names one keeps it: the model may be told to read a time in another zone, and
+ * that reading is not this function's to overrule.
+ * @param value - a date-time the model supplied.
+ * @returns the date-time with an explicit offset.
+ */
+function qualify(value) {
+  return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}${DEMO_ZONE_OFFSET}`
+}
+
+/**
+ * Render one instant as ISO-8601 in this deployment's zone.
+ * @param instant - milliseconds since the epoch.
+ * @returns e.g. `2026-09-21T08:05:00.000+08:00`.
+ */
+function inDemoZone(instant) {
+  const shifted = new Date(instant + DEMO_ZONE_OFFSET_MS).toISOString()
+  return `${shifted.slice(0, -1)}${DEMO_ZONE_OFFSET}`
+}
+
+/**
+ * The zone this demo speaks, stated once because three things have to agree on
+ * it: the seeded Orders carry `+08:00` stamps, the harness's clock context tells
+ * the model to read unqualified times in the browser's zone (the same one for
+ * anyone running this demo where it is meant to run), and the parameters below
+ * accept times in it. A parameter with no offset therefore means here, not UTC.
+ */
+const DEMO_ZONE_OFFSET = '+08:00'
+
+/** {@link DEMO_ZONE_OFFSET} in milliseconds, for shifting an instant into it. */
+const DEMO_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000
 
 /** Prefix every tool's guidance section is registered under. */
 const TOOL_SECTION_PREFIX = 'tool:'
@@ -200,7 +235,7 @@ export function apply(ctx) {
       '在当前客户自己的订单中查询，并请客户确认要咨询的是哪一笔。',
       '查到订单后会把订单卡片推给客户，等客户作答后才返回，所以本工具可能会等待较久。',
       '返回值是客户确认的那一笔订单；客户说都不是时返回 declined；一笔都没查到时返回 none，此时应请客户补充大概的时间或地点再查。',
-      '可选参数：location（租借地点，按包含匹配）、rentedFrom / rentedTo（租借时间范围，ISO-8601；只写日期时按 UTC 展开为那一整天）。两者都不给时查的是时间最近的一笔，卡片只问客户「是不是这一笔」；给了任一参数则按条件过滤，命中多笔时卡片会逐条列出供客户挑选。',
+      '可选参数：location（租借地点，按包含匹配）、rentedFrom / rentedTo（租借时间范围，含端点）。时间按北京时间（UTC+8）解释：只写日期（2026-10-09）表示那一整天的北京时间，也可写完整的带偏移时间（2026-10-09T18:40:00+08:00）。两者都不给时查的是时间最近的一笔，卡片只问客户「是不是这一笔」；给了任一参数则按条件过滤，命中多笔时卡片会逐条列出供客户挑选。',
       '本工具没有客户参数：客户身份来自当前登录，永远查不到别人的订单。',
     ].join('\n'),
     parameters: {
@@ -208,8 +243,8 @@ export function apply(ctx) {
       additionalProperties: false,
       properties: {
         location: { type: 'string', description: '租借地点，模糊匹配（包含即可）。可选。' },
-        rentedFrom: { type: 'string', description: '租借时间范围的开始（含），ISO-8601；只写日期按 UTC 展开。可选。' },
-        rentedTo: { type: 'string', description: '租借时间范围的结束（含），ISO-8601；只写日期按 UTC 展开。可选。' },
+        rentedFrom: { type: 'string', description: '租借时间范围的开始（含）。只写日期表示那一天的北京时间 00:00。可选。' },
+        rentedTo: { type: 'string', description: '租借时间范围的结束（含）。只写日期表示那一天的北京时间 23:59:59。可选。' },
       },
     },
     output: {

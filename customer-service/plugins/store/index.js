@@ -90,6 +90,12 @@ export const DEMO_ACCOUNTS = [
  * The locations share the vocabulary a Customer would actually use ("购物中心",
  * "地铁站") so a fuzzy query has something to match, and no two Orders of one
  * Customer sit at the same place or time.
+ *
+ * `blackgold` carries three more, all rented on 2026-10-09: without them a
+ * time-range query broad enough to be interesting still matches one Order per
+ * Customer, and the Card's "pick the one you mean" path never comes up. They
+ * are seeded rows like the rest, so they are frozen at that date rather than
+ * following the clock.
  */
 export const DEMO_ORDERS = [
   { orderId: 'ord-silver-1', customerId: 'cust-silver', location: '万象城购物中心 B1 层服务台', amountCents: 300, rentedAt: '2026-10-08T19:24:00+08:00', status: 'in_progress' },
@@ -100,6 +106,9 @@ export const DEMO_ORDERS = [
   { orderId: 'ord-platinum-2', customerId: 'cust-platinum', location: '深圳湾公园欢乐海岸入口', amountCents: 900, rentedAt: '2026-09-12T16:48:00+08:00', status: 'returned' },
   { orderId: 'ord-black-gold-1', customerId: 'cust-black-gold', location: '宝安国际机场 T3 到达厅', amountCents: 500, rentedAt: '2026-10-06T22:30:00+08:00', status: 'in_progress' },
   { orderId: 'ord-black-gold-2', customerId: 'cust-black-gold', location: '前海壹方城 B2 停车场', amountCents: 1500, rentedAt: '2026-08-28T11:20:00+08:00', status: 'returned' },
+  { orderId: 'ord-black-gold-3', customerId: 'cust-black-gold', location: '深南大道腾讯大厦 1 楼大堂', amountCents: 400, rentedAt: '2026-10-09T09:12:00+08:00', status: 'returned' },
+  { orderId: 'ord-black-gold-4', customerId: 'cust-black-gold', location: '深圳湾万象城 3 号门', amountCents: 800, rentedAt: '2026-10-09T13:05:00+08:00', status: 'returned' },
+  { orderId: 'ord-black-gold-5', customerId: 'cust-black-gold', location: '车公庙地铁站 C 出口', amountCents: 600, rentedAt: '2026-10-09T18:40:00+08:00', status: 'in_progress' },
 ]
 
 /**

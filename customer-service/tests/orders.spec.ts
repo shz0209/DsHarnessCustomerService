@@ -290,15 +290,15 @@ function outcomeOrder(outcome: ToolExecutionResult): Record<string, JsonValue> |
 }
 
 describe('the seeded Orders', () => {
-  it('gives every demo account one in-progress and one returned Order', async () => {
+  it('gives every demo account an in-progress and a returned Order, and nothing shared', async () => {
     const app = await boot()
     for (const account of DEMO_ACCOUNTS) {
       const orders = app.searchOrders(account.customerId)
-      expect(orders).toHaveLength(2)
-      expect(orders.map(order => order.status).sort()).toEqual(['in_progress', 'returned'])
-      // The account's own seeded Orders, not a shared pair handed to everyone.
-      expect(orders.map(order => order.orderId).sort())
-        .toEqual(DEMO_ORDERS.filter(order => order.customerId === account.customerId).map(order => order.orderId).sort())
+      const seeded = DEMO_ORDERS.filter(order => order.customerId === account.customerId)
+      // The account's own seeded Orders, not a shared set handed to everyone.
+      expect(orders.map(order => order.orderId).sort()).toEqual(seeded.map(order => order.orderId).sort())
+      expect(seeded.length).toBeGreaterThanOrEqual(2)
+      expect(new Set(seeded.map(order => order.status))).toEqual(new Set(['in_progress', 'returned']))
       for (const order of orders) {
         expect(order).toMatchObject({ customerId: account.customerId })
         expect(order.orderId).toMatch(/^ord-/)
@@ -306,11 +306,23 @@ describe('the seeded Orders', () => {
         expect(order.amountCents).toBeGreaterThan(0)
         expect(Number.isFinite(Date.parse(order.rentedAt))).toBe(true)
       }
-      // Two distinct places and two distinct times, or the Card cannot tell
-      // them apart when it asks the Customer which one they mean.
-      expect(new Set(orders.map(order => order.location)).size).toBe(2)
-      expect(new Set(orders.map(order => order.rentedAt)).size).toBe(2)
+      // Distinct places and distinct times, or the Card cannot tell two Orders
+      // apart when it asks the Customer which one they mean.
+      expect(new Set(orders.map(order => order.location)).size).toBe(orders.length)
+      expect(new Set(orders.map(order => order.rentedAt)).size).toBe(orders.length)
     }
+  })
+
+  it('dates the extra blackgold Orders on one day, so a broad query matches several', async () => {
+    const app = await boot()
+    const today = app.searchOrders('cust-black-gold', {
+      rentedFrom: '2026-10-09T00:00:00.000Z',
+      rentedTo: '2026-10-09T23:59:59.999Z',
+    })
+    // Several Orders on one day, which is what makes a broad time query reach
+    // the Card's "pick the one you mean" path.
+    expect(today.map(order => order.orderId)).toEqual(['ord-black-gold-5', 'ord-black-gold-4', 'ord-black-gold-3'])
+    expect(today.every(order => order.customerId === 'cust-black-gold')).toBe(true)
   })
 
   it('keeps the seeded Orders when the same store is opened again', async () => {
@@ -324,11 +336,15 @@ describe('the seeded Orders', () => {
 })
 
 describe('searchOrders', () => {
-  it('returns the most recently rented Order when nothing is filtered', async () => {
+  it('returns the most recently rented Order first when nothing is filtered', async () => {
     const app = await boot()
-    for (const order of DEMO_ORDERS) {
-      if (order.status !== 'in_progress') continue
-      expect(app.searchOrders(order.customerId)[0]?.orderId).toBe(order.orderId)
+    for (const account of DEMO_ACCOUNTS) {
+      const seeded = DEMO_ORDERS.filter(order => order.customerId === account.customerId)
+      const newest = seeded.reduce((latest, order) =>
+        Date.parse(order.rentedAt) > Date.parse(latest.rentedAt) ? order : latest)
+      // Newest first is what makes the unfiltered query answer with one Order:
+      // the tool takes the head of this list.
+      expect(app.searchOrders(account.customerId)[0]?.orderId).toBe(newest.orderId)
     }
   })
 
@@ -527,13 +543,14 @@ describe('search_orders', () => {
     const { cookie, sessionId } = await login(app.port, silver)
     const caller = await app.agent(sessionId)
 
-    // A date-only bound means that whole day in UTC, so it still covers an
-    // Order rented at 08:05+08:00 on it.
+    // A date-only bound means that whole day in Beijing, the zone the seeded
+    // Orders and the injected clock both speak, so it covers an Order rented at
+    // 08:05+08:00 on it and would cover one rented at 00:30.
     const running = app.execute('search_orders', { rentedFrom: '2026-09-21', rentedTo: '2026-09-21' }, caller, new AbortController().signal)
     const question = await waitForQuestion(app.port, cookie)
     expect(question.query).toEqual({
-      rentedFrom: '2026-09-21T00:00:00.000Z',
-      rentedTo: '2026-09-21T23:59:59.999Z',
+      rentedFrom: '2026-09-21T00:00:00.000+08:00',
+      rentedTo: '2026-09-21T23:59:59.999+08:00',
     })
     expect(question.candidates.map(candidate => candidate.orderId)).toEqual(['ord-silver-2'])
 
@@ -543,6 +560,29 @@ describe('search_orders', () => {
       body: { callId: 'call-1', orderId: 'ord-silver-2' },
     })
     expect(outcomeOrder(await running)?.orderId).toBe('ord-silver-2')
+  })
+
+  it('reads a time with no offset as Beijing time, and keeps one that has it', async () => {
+    const app = await boot()
+    const { cookie, sessionId } = await login(app.port, silver)
+    const caller = await app.agent(sessionId)
+
+    const ask = async (args: Record<string, string>, orderId: string) => {
+      const running = app.execute('search_orders', args, caller, new AbortController().signal)
+      const question = await waitForQuestion(app.port, cookie)
+      await call(app.port, '/order-question/answer', { method: 'POST', cookie, body: { callId: 'call-1', orderId } })
+      expect(outcomeOrder(await running)?.orderId).toBe(orderId)
+      return question
+    }
+
+    // 08:05 with no offset is 08:05 in Beijing, which is when ord-silver-2 was
+    // rented — the same instant the seeded row records.
+    expect((await ask({ rentedFrom: '2026-09-21T08:05:00', rentedTo: '2026-09-21T08:05:00' }, 'ord-silver-2')).query)
+      .toEqual({ rentedFrom: '2026-09-21T08:05:00.000+08:00', rentedTo: '2026-09-21T08:05:00.000+08:00' })
+    // The same instant written in Z reaches the same Order; the offset the model
+    // wrote is honoured rather than overruled.
+    expect((await ask({ rentedFrom: '2026-09-21T00:05:00Z', rentedTo: '2026-09-21T00:05:00Z' }, 'ord-silver-2')).query)
+      .toEqual({ rentedFrom: '2026-09-21T08:05:00.000+08:00', rentedTo: '2026-09-21T08:05:00.000+08:00' })
   })
 
   it('trims the location it matches on', async () => {
