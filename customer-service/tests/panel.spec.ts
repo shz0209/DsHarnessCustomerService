@@ -140,7 +140,7 @@ describe('the panel and the login behind it', () => {
   it('refuses a request that carries no login at all', async () => {
     const app = await boot()
     expect((await call(app.port, '/orders')).status).toBe(401)
-    expect((await createOrder(app, '', { location: '万象城', amountCents: 300 })).status).toBe(401)
+    expect((await createOrder(app, '', { location: '万象城' })).status).toBe(401)
     expect((await call(app.port, '/orders/return', { method: 'POST', body: { orderId: OPEN_ORDER } })).status).toBe(401)
   })
 
@@ -180,13 +180,14 @@ describe('creating an Order from the panel', () => {
     const { cookie } = await login(app.port, silver)
     const first = await createOrder(app, cookie, {
       location: '会展中心地铁站 D 出口',
-      amountCents: 450,
     })
     expect(first.status).toBe(201)
     const order = bodyOf<{ order: PanelOrder }>(first).order
     expect(order).toMatchObject({
       location: '会展中心地铁站 D 出口',
-      amountCents: 450,
+      // Just rented, so the minute it is inside of: the amount is billed, not
+      // sent.
+      amountCents: 10,
       status: 'in_progress',
       statusLabel: '进行中',
       rentedAt: NOW_STAMP,
@@ -202,7 +203,6 @@ describe('creating an Order from the panel', () => {
     // Two Orders, two numbers.
     const second = bodyOf<{ order: PanelOrder }>(await createOrder(app, cookie, {
       location: '深圳湾万象城 3 号门',
-      amountCents: 200,
     })).order
     expect(second.orderId).not.toBe(order.orderId)
 
@@ -211,9 +211,11 @@ describe('creating an Order from the panel', () => {
     // nothing is written.
     const before = app.searchOrders(silver.customerId).length
     for (const body of [
-      { orderId: 'ord-mine', location: '万象城', amountCents: 300 },
-      { customerId: gold.customerId, location: '万象城', amountCents: 300 },
-      { status: 'returned', location: '万象城', amountCents: 300 },
+      { orderId: 'ord-mine', location: '万象城' },
+      { customerId: gold.customerId, location: '万象城' },
+      { status: 'returned', location: '万象城' },
+      // The amount is the server's to bill from the rental time too.
+      { location: '万象城', amountCents: 300 },
     ]) {
       expect((await createOrder(app, cookie, body)).status, JSON.stringify(body)).toBe(400)
     }
@@ -225,7 +227,6 @@ describe('creating an Order from the panel', () => {
     const { cookie } = await login(app.port, silver)
     const given = bodyOf<{ order: PanelOrder }>(await createOrder(app, cookie, {
       location: '华强北电子市场 2 号门',
-      amountCents: 200,
       rentedAt: '2026-10-09T18:40',
     })).order
     // The panel's `datetime-local` value names no zone; the demo speaks one.
@@ -233,17 +234,39 @@ describe('creating an Order from the panel', () => {
 
     const defaulted = bodyOf<{ order: PanelOrder }>(await createOrder(app, cookie, {
       location: '宝安国际机场 T3 到达厅',
-      amountCents: 500,
     })).order
     expect(defaulted.rentedAt).toBe(NOW_STAMP)
 
     // An empty field is the panel's "leave it to the server", not a bad value.
     const empty = bodyOf<{ order: PanelOrder }>(await createOrder(app, cookie, {
       location: '深圳湾公园欢乐海岸入口',
-      amountCents: 900,
       rentedAt: '',
     })).order
     expect(empty.rentedAt).toBe(NOW_STAMP)
+  })
+
+  it('bills each Order from how long it has been out, per minute and capped', async () => {
+    const app = await boot()
+    const { cookie } = await login(app.port, silver)
+    // NOW is 2026-10-10T10:00 in the demo's zone: every case is a rental time
+    // that many minutes before it.
+    const cases = [
+      ['刚借出', '', 10],
+      ['一分钟', '2026-10-10T09:59', 10],
+      ['半小时', '2026-10-10T09:30', 300],
+      ['一小时', '2026-10-10T09:00', 600],
+      ['三小时', '2026-10-10T07:00', 1800],
+      ['隔了几天', '2026-10-01T10:00', 9900],
+    ] as const
+    for (const [label, rentedAt, amountCents] of cases) {
+      const order = bodyOf<{ order: PanelOrder }>(await createOrder(app, cookie, {
+        location: `计费用例 · ${label}`,
+        ...rentedAt === '' ? {} : { rentedAt },
+      })).order
+      expect(order.amountCents, label).toBe(amountCents)
+      // 封顶 ¥99.00 is the most an Order can cost, however long it was out.
+      expect(order.amountCents, label).toBeLessThanOrEqual(9900)
+    }
   })
 
   it('refuses a body it cannot act on, writing nothing', async () => {
@@ -251,15 +274,12 @@ describe('creating an Order from the panel', () => {
     const { cookie } = await login(app.port, silver)
     const before = app.searchOrders(silver.customerId)
     const rejected: Record<string, unknown>[] = [
-      { location: '', amountCents: 300 },
-      { location: '   ', amountCents: 300 },
-      { location: '万象城', amountCents: -1 },
-      { location: '万象城', amountCents: 3.5 },
-      { location: '万象城', amountCents: '300' },
-      { location: '万象城' },
-      { location: '万象城', amountCents: 300, rentedAt: '昨天下午' },
-      { location: '万象城', amountCents: 300, rentedAt: '2026-02-31T10:00' },
-      { location: '万象城', amountCents: 300, rentedAt: 20261009 },
+      { location: '' },
+      { location: '   ' },
+      {},
+      { location: '万象城', rentedAt: '昨天下午' },
+      { location: '万象城', rentedAt: '2026-02-31T10:00' },
+      { location: '万象城', rentedAt: 20261009 },
     ]
     for (const body of rejected) {
       expect((await createOrder(app, cookie, body)).status, JSON.stringify(body)).toBe(400)
@@ -272,7 +292,6 @@ describe('creating an Order from the panel', () => {
     const { cookie } = await login(app.port, silver)
     const created = bodyOf<{ order: PanelOrder }>(await createOrder(app, cookie, {
       location: '深圳北站候车厅 3 号点位',
-      amountCents: 600,
     })).order
     const { orders } = bodyOf<{ orders: PanelOrder[] }>(await call(app.port, '/orders', { cookie }))
     // Newest first, which is what makes the freshly created Order the one the
@@ -374,7 +393,6 @@ describe('the demo the panel exists for', () => {
     // window the seeded data can never demonstrate.
     const old = bodyOf<{ order: PanelOrder }>(await createOrder(app, panelCookie, {
       location: '会展中心地铁站 D 出口',
-      amountCents: 300,
       rentedAt: '2026-10-10T07:00',
     })).order
 
@@ -391,7 +409,6 @@ describe('the demo the panel exists for', () => {
     // Agent can actually close.
     const fresh = bodyOf<{ order: PanelOrder }>(await createOrder(app, panelCookie, {
       location: '万象城购物中心 B1 层服务台',
-      amountCents: 300,
     })).order
     const second = await login(app.port, silver)
     const secondAgent = await app.agent(second.sessionId)

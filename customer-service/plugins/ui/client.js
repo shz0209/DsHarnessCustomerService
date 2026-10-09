@@ -96,9 +96,8 @@ window.__ModuleLoader__.load({
       create: '创建订单',
       createLead: '造一笔「进行中」的订单：',
       location: '租借地点',
-      amount: '金额（元）',
       rentedAt: '租借时间',
-      rentedAtHint: '租借时间按北京时间填写，留空表示当前时间。订单号由系统生成，新订单的状态固定为「进行中」。',
+      rentedAtHint: '租借时间按北京时间填写，留空表示当前时间。订单号与状态由系统生成，金额按借出时长计算：每分钟 ¥0.10，封顶 ¥99.00。',
       submit: '创建',
       cancel: '取消',
       returnOrder: '归还',
@@ -108,7 +107,6 @@ window.__ModuleLoader__.load({
       loadError: '订单暂时无法加载，请稍后重试',
       createError: '创建订单失败，请重试',
       returnError: '归还失败，请重试',
-      amountError: '金额请填不小于 0 的数字，最多两位小数',
     }
     /** Order-card polling interval while the host has not published the question yet. */
     const ORDER_POLL_INTERVAL_MS = 800
@@ -1080,18 +1078,6 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Read the panel's 金额（元） field as the integer cents the host stores.
-     * @param text - what the Customer typed.
-     * @returns the amount in cents, or `undefined` when it is not a usable one.
-     */
-    function parseAmount(text) {
-      const trimmed = text.trim()
-      if (!/^\d+(?:\.\d{1,2})?$/.test(trimmed)) return undefined
-      const cents = Math.round(Number(trimmed) * 100)
-      return Number.isSafeInteger(cents) ? cents : undefined
-    }
-
-    /**
      * The create dialog: the panel's one form, and the only thing in this file
      * that writes an Order.
      *
@@ -1101,7 +1087,7 @@ window.__ModuleLoader__.load({
      * @returns the dialog.
      */
     function CreateOrderDialog({ onClose, onCreated }) {
-      const [form, setForm] = useState({ location: '', amount: '', rentedAt: '' })
+      const [form, setForm] = useState({ location: '', rentedAt: '' })
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
 
@@ -1112,11 +1098,6 @@ window.__ModuleLoader__.load({
       const submit = useCallback(event => {
         event.preventDefault()
         if (busy) return
-        const amountCents = parseAmount(form.amount)
-        if (amountCents === undefined) {
-          setError(PANEL_CARD.amountError)
-          return
-        }
         setBusy(true)
         setError('')
         void (async () => {
@@ -1125,9 +1106,9 @@ window.__ModuleLoader__.load({
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               location: form.location,
-              amountCents,
               // An empty field means "now", which is the host's reading too; a
-              // filled one is the time the Customer picked.
+              // filled one is the time the Customer picked. The amount is the
+              // host's to bill from it.
               ...form.rentedAt === '' ? {} : { rentedAt: form.rentedAt },
             }),
           })
@@ -1163,15 +1144,6 @@ window.__ModuleLoader__.load({
           placeholder: '万象城购物中心 B1 层服务台',
           disabled: busy,
           onChange: event => edit('location', event.target.value),
-        })),
-        field(PANEL_CARD.amount, h('input', {
-          className: 'cs-order__input',
-          name: 'amount',
-          value: form.amount,
-          inputMode: 'decimal',
-          placeholder: '3.00',
-          disabled: busy,
-          onChange: event => edit('amount', event.target.value),
         })),
         field(PANEL_CARD.rentedAt, h('input', {
           className: 'cs-order__input',

@@ -20,6 +20,11 @@
  *
  * The panel itself is browser presentation in `plugins/ui/client.js` and talks
  * to these routes the way the Card does, over bare HTTP (ADR-0003, ADR-0006).
+ *
+ * An Order's amount is billed from its rental time, not typed in: 每分钟 ¥0.10,
+ * 封顶 ¥99.00. That is what makes the amount a fact about the Order rather than
+ * a number someone made up, and it is why `amountCents` is not a field a
+ * create request may carry.
  */
 import { cardOrder } from '../shared/orders.js'
 import { readJsonBody, registerJsonRoute, requireLogin, sendJson } from '../shared/http.js'
@@ -34,10 +39,17 @@ export const name = 'customer-service-orders'
 export const inject = ['webServer', 'connection', 'customerIdentity', 'customerStore']
 
 /** The fields `POST /orders/create` accepts. Anything else is rejected. */
-const CREATE_FIELDS = ['location', 'amountCents', 'rentedAt']
+const CREATE_FIELDS = ['location', 'rentedAt']
 
 /** The panel's `datetime-local` value: wall-clock in this deployment's zone. */
 const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/
+
+/** What one rented minute costs, in cents, and the most an Order can cost. */
+const CENTS_PER_MINUTE = 10
+const MAX_AMOUNT_CENTS = 9900
+
+/** One minute, the billing unit. */
+const MS_PER_MINUTE = 60_000
 
 /**
  * Register the panel's routes.
@@ -80,7 +92,11 @@ function createOrder(ctx) {
       sendJson(res, 400, { error: parsed.error })
       return
     }
-    const created = await ctx.customerStore.createOrder({ customerId: login.customer.customerId, ...parsed.input })
+    const created = await ctx.customerStore.createOrder({
+      customerId: login.customer.customerId,
+      ...parsed.input,
+      amountCents: chargeFor(parsed.input.rentedAt, Date.now()),
+    })
     if (created === undefined) {
       // Unreachable through a login — the Customer row is the one the cookie
       // resolved — so this is a store the login outlived, not a bad request.
@@ -127,9 +143,9 @@ function closeOrder(ctx) {
  *
  * Validation belongs here, at the wire boundary: the body arrives from a
  * browser, so every field is checked and an unknown one is refused rather than
- * ignored — the owning Customer, the Order number and the status are the
- * server's to decide, and a request that tries to set any of them is told so
- * instead of being quietly overruled.
+ * ignored — the owning Customer, the Order number, the status and the amount
+ * are the server's to decide, and a request that tries to set any of them is
+ * told so instead of being quietly overruled.
  * @param body - the parsed request body.
  * @returns the store's input, or the message to answer 400 with.
  */
@@ -137,19 +153,33 @@ function parseNewOrder(body) {
   if (body === undefined) return { error: '请求格式不正确：需要一个 JSON 对象。' }
   const unknown = Object.keys(body).filter(key => !CREATE_FIELDS.includes(key))
   if (unknown.length > 0) {
-    return { error: `未知字段：${unknown.join('、')}。所属客户、订单号与订单状态由服务端决定，不能指定。` }
+    return { error: `未知字段：${unknown.join('、')}。所属客户、订单号、订单状态与金额由服务端决定，不能指定。` }
   }
 
-  const { location, amountCents, rentedAt } = body
+  const { location, rentedAt } = body
   if (typeof location !== 'string' || location.trim() === '') return { error: '租借地点不能为空。' }
-  if (!Number.isSafeInteger(amountCents) || amountCents < 0) {
-    return { error: '金额必须是不小于 0 的整数（单位：分）。' }
-  }
   const rented = parseRentedAt(rentedAt)
   if (rented === undefined) {
     return { error: '租借时间格式不正确：请用 2026-10-10T14:30，或留空表示当前时间。' }
   }
-  return { input: { location: location.trim(), amountCents, rentedAt: rented } }
+  return { input: { location: location.trim(), rentedAt: rented } }
+}
+
+/**
+ * Bill one Order from the time it has been out.
+ *
+ * 每分钟 ¥0.10，封顶 ¥99.00，and a rental that has just started is billed one
+ * minute rather than none: an Order that costs nothing is not a state this
+ * demo has a price for, and the minute is the unit the location's own pricing
+ * is quoted in.
+ * @param rentedAt - the rental time, an offset-carrying ISO-8601 stamp.
+ * @param now - the server instant the Order is created at.
+ * @returns the amount in integer cents, at least {@link CENTS_PER_MINUTE} and
+ *   at most {@link MAX_AMOUNT_CENTS}.
+ */
+function chargeFor(rentedAt, now) {
+  const minutes = Math.max(1, Math.ceil((now - Date.parse(rentedAt)) / MS_PER_MINUTE))
+  return Math.min(minutes * CENTS_PER_MINUTE, MAX_AMOUNT_CENTS)
 }
 
 /**
