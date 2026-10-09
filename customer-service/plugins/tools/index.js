@@ -26,12 +26,13 @@ export const name = 'customer-service-tools'
  * binding, the Order table, and the HTTP router behind the trust fence. */
 export const inject = ['tools', 'agents', 'customerIdentity', 'customerStore', 'webServer', 'connection']
 
-/** The one tool this deployment allows. Named once: the browser's Card is keyed
- * by it too, so a rename must reach both sides from one place. */
-const SEARCH_ORDERS = 'search_orders'
+/** The one tool this deployment allows, and the name the opening protocol calls
+ * it by. The browser's Card is keyed by the same name but cannot import it —
+ * a rename has to reach `plugins/ui/client.js` by hand (ADR-0006). */
+export const SEARCH_ORDERS_TOOL = 'search_orders'
 
 /** The only tool any agent of this deployment may see or call. */
-export const ALLOWED_TOOLS = [SEARCH_ORDERS]
+export const ALLOWED_TOOLS = [SEARCH_ORDERS_TOOL]
 
 /** Argument names the tool accepts. Anything else is rejected, not ignored. */
 const PARAMETER_NAMES = ['location', 'rentedFrom', 'rentedTo']
@@ -230,7 +231,7 @@ export function apply(ctx) {
 
   /** The one tool a Customer-facing agent may call. */
   const definition = {
-    name: SEARCH_ORDERS,
+    name: SEARCH_ORDERS_TOOL,
     description: [
       '在当前客户自己的订单中查询，并请客户确认要咨询的是哪一笔。',
       '查到订单后会把订单卡片推给客户，等客户作答后才返回，所以本工具可能会等待较久。',

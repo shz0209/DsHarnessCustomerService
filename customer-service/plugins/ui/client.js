@@ -1,5 +1,5 @@
 /**
- * Browser half of the customer-service UI plugin (issues #3, #4, and #5).
+ * Browser half of the customer-service UI plugin (issues #3, #4, #5, and #6).
  * Hand-written in the closure factory form the Client module system loads
  * (ADR-0006): no build step, no `@deepseek-ai/dsh-*` import, `require` answers
  * from the loader's module table.
@@ -19,6 +19,11 @@
  *     the Orders the running call matched, and the buttons that answer it. The
  *     answer is the tool's return value, so a settled call renders from the
  *     result the host logged and replays with no host state at all (ADR-0001).
+ *
+ * And one thing that is not a surface: the opening (issue #6). A Customer who
+ * has just logged in has nothing to say yet, so this file asks the host to
+ * admit the trigger message the Agent's opening protocol is written for; the
+ * Agent then greets and cards the newest Order without being asked.
  *
  * The login state lives in the `cs_session` cookie the host sets; this file
  * only ever reads the answer to `GET /customer-service/session`. The one piece
@@ -150,6 +155,54 @@ window.__ModuleLoader__.load({
       return true
     }
 
+    /**
+     * The browser's IANA time zone, as every message the composer sends
+     * carries it.
+     *
+     * The opening request carries it for the same reason: the host admits the
+     * trigger as a message from this browser, and the clock the harness injects
+     * into that turn is read in this zone. Without it the model is told to ask
+     * the Customer which zone they mean.
+     * @returns the zone name, or `undefined` when the browser names none.
+     */
+    function browserTimeZone() {
+      try {
+        // A runtime can report an empty zone, which is not a zone name: send
+        // none instead, so the opening is admitted without one rather than
+        // refused for carrying something unusable.
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+      } catch {
+        // A browser that cannot name a zone sends none either way.
+        return undefined
+      }
+    }
+
+    // Asking to open happens once per page load. The host admits the trigger
+    // only once per Session, so a repeat is a no-op — but both surfaces below
+    // resolve the login state, so this flag keeps the ask to one.
+    let openingRequested = false
+
+    /**
+     * Ask the host to open the conversation, which admits the one trigger
+     * message the Agent's opening protocol is written for.
+     *
+     * A refused opening is reported by the host and not shown here: the Customer
+     * is left with an empty conversation they can still type into, which beats a
+     * notice over a conversation that is otherwise fine.
+     */
+    function openConversation() {
+      if (openingRequested) return
+      openingRequested = true
+      void requestJson('/opening', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientTimeZone: browserTimeZone() }),
+      }).catch(() => {
+        // An unreachable host is the same empty conversation, and the next page
+        // load asks again.
+      })
+    }
+
     // Adopting the bound Session happens once per page load, not once per
     // surface: the sidebar and the login mask each resolve the login state, and
     // whichever answers first does the adopting. Afterwards a Session the
@@ -177,6 +230,7 @@ window.__ModuleLoader__.load({
                 return
               }
             }
+            openConversation()
             setSession({ phase: 'authenticated', customer: payload, error: '' })
             return
           }

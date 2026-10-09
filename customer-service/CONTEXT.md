@@ -43,6 +43,9 @@ The Customer's membership tier. Four tiers, ordered:
 
 ### Service actions
 
+**开场** (opening):
+The Agent's first move of a conversation, made as soon as the Customer logs in: it greets them and presents the Customer's most recently rented Order as a card to confirm. The Customer says nothing first.
+
 **人工还宝** (manual return):
 The Agent closing a rental on the Customer's behalf, for a Customer who cannot return the power bank to a location themselves.
 It sets the Order to `已归还` and records the return time.
