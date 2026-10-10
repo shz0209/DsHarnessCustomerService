@@ -37,7 +37,7 @@ pnpm dsh --profile web --patch customer-service/app.overlay.yml
 ## 当前状态：登录、身份、侧栏、订单卡片、开场、人工还宝、退款与管理面板（issue #3、#4、#5、#6、#7、#8、#9）
 
 ```
-app.overlay.yml                   覆盖层：SQLite 后端、Customer 域、下面五个插件
+app.overlay.yml                   覆盖层：SQLite 后端、Customer 域、客服人设的 agent preset、下面五个插件
 plugins/shared/vocabulary.js      等级取值与中文名、订单状态（进行中/已归还/已退款）与中文名
 plugins/shared/http.js            裸 HTTP 路由的注册与 JSON 收发
 plugins/shared/time.js            演示时区（UTC+8）与时间戳渲染
@@ -70,6 +70,24 @@ plugins/ui/                       浏览器半边：登录页、侧栏接管与�
 会话绑定只活在本进程内：登录时建立，退出时删除，重启后需要重新登录。这也是库里没有绑定表的原因——演示够用，且少一张表。
 
 登录建立的会话挂在 `config.workspacePath` 指向的工作区上（覆盖层里解析为 `customer-service/`）。这一步不能省：只带工作目录、不挂工作区的会话，浏览器会渲染成「选择一个工作区」落地页，客户于是在另一个未绑定的会话里提问，`customerIdentity` 永远匹配不上，模型什么也收不到。
+
+## 客服人设：本目录自己的一档 agent preset
+
+模型看到的系统提示词由 `@deepseek-ai/dsh-system-prompt` 按 `order` 拼起来（固定开场白 → 人设 → 各工具段 → 运行时上下文），**人设那一段来自 agent preset**：`--profile web` 默认挂的是 `standard` 档，它的人设行 `@deepseek-ai/dsh-persona` 写的是 `You are a coding agent powered by the {{model}} model.`。
+
+演示要的是充电宝客服，所以在 `app.overlay.yml` 里本目录自己声明一档 preset（`id: customer-service`，显示名「充电宝客服」），只挂三个子行：
+
+| 子行 | 作用 |
+| --- | --- |
+| `@deepseek-ai/dsh-persona` | 客服人设：三件事（查订单、推卡片让客户确认、按规则办还宝与退款）+ 规则由代码判定、不自行改口径 + 不要反过来要客户报订单号 |
+| `@deepseek-ai/dsh-time-context` | 注入时钟——「上周三」这类说法要靠它换算 |
+| `@deepseek-ai/dsh-compaction-basic` | 长会话的上下文压缩（照 standard 档的写法做了 `isolate`，token 计量仍留在宿主层） |
+
+**工具不在这里挂**：那五个工具由 `plugins/tools/index.js` 在宿主层注册，并按 [ADR-0005](docs/adr/0005-tool-allowlist-enforced-at-agent-scope.md) 把每个 agent 遮到只剩它们——preset 再列一遍工具只会重复一份已经由遮罩决定的事。
+
+然后把 `agent-preset-registry` 的默认值指到这档（`- id: agent-preset-registry` 只改一个字段，因为按 id 打的补丁整份替换 `config`）。`standard` 档仍然注册着、也仍然可切换，只是默认不再用它；界面上会话标题旁边那一行从「Standard mode」变成「充电宝客服」。
+
+实测（登录一次后读会话日志 `system/message`）：提示词开头是固定的 `You are an AI agent powered by DeepSeek Harness.`，紧接着就是上面那段客服人设。**宿主层还往提示词里放了三段与客服无关的话**——交付物与文件引用的写法、这份 harness 检出在哪、以及 Web GUI 与插件热更新——它们不归 preset 管（`file-reference-local`、`ui-deliverables`、`app-boot`、`web-app` 自己的宿主行），要一并去掉得再遮那几个行。
 
 ## 侧栏接管与页面标题
 
