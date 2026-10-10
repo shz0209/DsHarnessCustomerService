@@ -1,0 +1,10 @@
+# Spike overlay (issue #2): load the out-of-tree host and browser plugins.
+#
+# Applied with `--patch`; relative plugin names resolve against this file's
+# directory, so both rows point into `customer-service/plugins/` regardless of
+# the invoking working directory.
+- insert:
+    - id: spike-host
+      name: ./plugins/spike-host/index.js
+    - id: spike-banner
+      name: ./plugins/spike-banner/index.js

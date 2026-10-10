@@ -1,0 +1,92 @@
+# Customer Service demo overlay: load the out-of-tree host plugins.
+#
+# Applied with `--patch customer-service/app.overlay.yml` from the repository
+# root; relative plugin names resolve against this file's directory, so the rows
+# point into `customer-service/plugins/` regardless of the invoking directory.
+# The database path below is the one cwd-relative value in this file, which is
+# why the launch command is documented as running from the repository root.
+- insert:
+    - id: customer-service-storage-sqlite
+      name: '@deepseek-ai/dsh-storage-sqlite'
+      config:
+        path: customer-service/data/customer-service.sqlite
+# Keep the shipped JSON backend as the default and route only this domain to
+# SQLite; an id-targeted patch replaces the whole config, so both keys restate.
+- id: storage-domain
+  config:
+    backend: json
+    routes:
+      customer: sqlite
+# The tool allowlist and the native presentation that completes it are declared
+# per Agent scope by `plugins/tools/index.js`, not here: a security invariant
+# that a config field could turn off is not an invariant.
+- insert:
+    - id: customer-service-store
+      name: ./plugins/store/index.js
+    # The Workspace every customer Session is created in. Resolved against the
+    # launch directory, so this is the second value that requires starting from
+    # the repository root (see README).
+    - id: customer-service-auth
+      name: ./plugins/auth/index.js
+      config:
+        workspacePath: !!js process.getBuiltinModule('node:path').resolve('customer-service')
+    - id: customer-service-tools
+      name: ./plugins/tools/index.js
+    # The routes behind the panel. They register no tool: what the model may
+    # call stays the five of ADR-0005, whatever the account.
+    - id: customer-service-orders
+      name: ./plugins/orders/index.js
+    - id: customer-service-ui
+      name: ./plugins/ui/index.js
+# ── 客服人设：本目录自己的 agent preset ─────────────────────────────────────────
+# The web profile's sessions mount the shipped `standard` preset, whose persona
+# row makes the model a coding agent. The demo talks to customers, so this
+# directory declares a preset of its own and points the registry's default at
+# it: 人设 + 时间上下文 + 上下文压缩. Tools are deliberately absent — the five of
+# ADR-0005 are registered on the host plane by `plugins/tools/index.js`, which
+# masks every agent to them, so a preset listing tools would only restate what
+# the mask already decides.
+#
+# `standard` stays registered and remains selectable — the composer's preset
+# control lists both; only the default moves.
+- insert:
+    - id: preset-customer-service
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: customer-service
+        name: 充电宝客服
+        description: 共享充电宝的在线客服：查订单、人工还宝、退款
+        order: 0
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                你是「共享充电宝」的在线客服，接待租借、归还与退款遇到问题的客户。
+                你能做的是三件事：按客户说的时间或地点把订单查出来，把订单作为卡片推给客户确认，在系统规则允许时办理人工还宝或退款。
+                订单属于谁、能不能人工还宝、能不能退款，都由系统按固定规则判定；你把结论如实转达给客户，不自行判断，也不因为客户坚持就改口径。
+                客户通常报不出订单号——把订单推出来让客户确认，不要反过来要求客户提供。
+              # How the agent speaks goes in the suffix (order 10200, after every
+              # first-party section): it is a rule about talking to a Customer,
+              # and it lands next to — and after — the harness's own prose.
+              suffix: >-
+                对客户只说人话：不提工具、校验、凭证、字段、接口、"系统返回"这类内部说法，也不要说"查询结果显示""已为你调用"。
+                说客户自己的词：订单、充电宝、租借、归还、退款、钱、时间；一句话说一件事，短句，别堆术语。
+                结论不能走样——不能办的要说清为什么不能办，但别用内部名词去讲。
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          # Isolated the way the shipped preset isolates it: the backend moves
+          # to the preset, the token meter that owns its projection stays on the
+          # host plane (packages/bundle/web-app/cordis.patch.yml)。
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+# An id-targeted patch replaces the whole config, so the row's one field restates.
+- id: agent-preset-registry
+  config:
+    default: customer-service

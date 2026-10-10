@@ -1,0 +1,3 @@
+# The demo database: created on first launch, never committed.
+data/*.sqlite
+data/*.sqlite-*
