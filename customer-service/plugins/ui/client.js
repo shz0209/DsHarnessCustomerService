@@ -833,6 +833,23 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * A seat this file takes away: nothing renders where it sat.
+     *
+     * The header's right-hand controls are the shell's, not the Customer's —
+     * one opens the session's directory in a desktop application, the other
+     * opens the right panel — so this demo leaves the corner to the 会话日志 menu
+     * beside it and the menu alone. Each is shadowed the way the sidebar is
+     * (ADR-0007): a second entry in the same cell at a lower priority, of which
+     * the lowest live one renders. An empty cell leaves no gap — the header's
+     * flex rows lay out only what renders — and the corner collapses into the
+     * utilities' edge exactly as its own documentation describes.
+     * @returns nothing.
+     */
+    function NoControl() {
+      return null
+    }
+
+    /**
      * Flatten settled result content blocks into one line of copy.
      * @param content - the result node's content blocks.
      * @returns the text, or `''` when the blocks carry none.
@@ -1450,6 +1467,18 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('conversation.header.leading', () => ctx.slots.register({
           name: 'conversation.header.leading',
         }, BrandTitle))
+        // `open-in-app` is the id `ui-open-in-app` registers its header cell
+        // under; a lower priority shadows that cell, and the session-log menu
+        // beside it keeps the corner to itself.
+        ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+          name: 'conversation.session.header.utilities',
+          id: 'open-in-app',
+          priority: -1,
+        }, NoControl))
+        ctx.slots.inject('conversation.session.header.corner', () => ctx.slots.register({
+          name: 'conversation.session.header.corner',
+          priority: -1,
+        }, NoControl))
         // The panel is a Conversation View: a third tab in the row 对话 and 轨迹
         // share, whose body takes the center pane while it is selected. The
         // shipped views sit at orders 0 and 10, so 20 puts this one last, to
