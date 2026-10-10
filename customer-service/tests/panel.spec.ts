@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ALLOWED_TOOLS } from '../plugins/tools/index.js'
-import { bodyOf, call, disposeAll } from './support.js'
+import { MISSING_ORDER, ORDER_NUMBER, bodyOf, call, disposeAll } from './support.js'
 import {
   boot, demoAccount, login, outcomeOrder, outcomeText, outcomeValue, waitForQuestion, writeStoredOrder,
 } from './composition.js'
@@ -29,16 +29,19 @@ const silver = demoAccount('silver')
 const gold = demoAccount('gold')
 
 /** Silver's in-progress Order, which the panel closes. */
-const OPEN_ORDER = 'ord-silver-1'
+const OPEN_ORDER = 'cbb14662-4d88-4361-9710-9a4229c1c960'
 
 /** Silver's other Order: already 已归还, so the panel may not close it again. */
-const CLOSED_ORDER = 'ord-silver-2'
+const CLOSED_ORDER = 'a5ca2d55-ff76-4f63-8b51-96f7a0df182c'
 
 /** Gold's in-progress Order, which silver's panel must never reach. */
-const OTHER_CUSTOMERS_ORDER = 'ord-gold-1'
+const OTHER_CUSTOMERS_ORDER = '33163a30-6164-43d5-b2b3-c5e1b377d219'
 
 /** Platinum's returned Order, the one a refund moves on to 已退款. */
-const PLATINUM_RETURNED = 'ord-platinum-2'
+const PLATINUM_RETURNED = '9a83ac26-7657-48c2-91b8-4d15baedd6e8'
+
+/** A row no demo seeds: the one a test writes straight into the table. */
+const STORED_ORDER = '0f3e5c1a-9d2b-4a7e-8c14-6b0d2f9e4a51'
 
 /** The server instant every test starts from, after the seeded Orders. */
 const NOW = Date.parse('2026-10-10T10:00:00+08:00')
@@ -150,12 +153,12 @@ describe('the panel and the login behind it', () => {
     const answer = await call(app.port, '/orders', { cookie })
     expect(answer.status).toBe(200)
     const { orders } = bodyOf<{ orders: PanelOrder[] }>(answer)
-    expect(orders.map(order => order.orderId)).toEqual(['ord-silver-1', 'ord-silver-2'])
+    expect(orders.map(order => order.orderId)).toEqual([OPEN_ORDER, CLOSED_ORDER])
     expect(orders.map(order => order.statusLabel)).toEqual(['进行中', '已归还'])
     // The panel shows the same fields the Cards do, and no owner key: every
     // Order here is the caller's own.
     expect(orders[0]).toEqual({
-      orderId: 'ord-silver-1',
+      orderId: OPEN_ORDER,
       location: '万象城购物中心 B1 层服务台',
       rentedAt: '2026-10-08T19:24:00+08:00',
       amountCents: 300,
@@ -169,8 +172,9 @@ describe('the panel and the login behind it', () => {
     const app = await boot()
     const { cookie } = await login(app.port, silver)
     const { orders } = bodyOf<{ orders: PanelOrder[] }>(await call(app.port, '/orders', { cookie }))
-    expect(orders.map(order => order.orderId)).not.toContain(OTHER_CUSTOMERS_ORDER)
-    expect(orders.every(order => order.orderId.startsWith('ord-silver-'))).toBe(true)
+    // Silver's own two, and nothing else: gold's Order number is not here to
+    // be seen at all.
+    expect(orders.map(order => order.orderId)).toEqual([OPEN_ORDER, CLOSED_ORDER])
   })
 })
 
@@ -192,7 +196,7 @@ describe('creating an Order from the panel', () => {
       statusLabel: '进行中',
       rentedAt: NOW_STAMP,
     })
-    expect(order.orderId).toMatch(/^ord-[0-9a-f]{8}$/)
+    expect(order.orderId).toMatch(ORDER_NUMBER)
     expect(order.returnedAt).toBeUndefined()
 
     // It belongs to the login, not to anything the request said: silver's own
@@ -211,7 +215,7 @@ describe('creating an Order from the panel', () => {
     // nothing is written.
     const before = app.searchOrders(silver.customerId).length
     for (const body of [
-      { orderId: 'ord-mine', location: '万象城' },
+      { orderId: MISSING_ORDER, location: '万象城' },
       { customerId: gold.customerId, location: '万象城' },
       { status: 'returned', location: '万象城' },
       // The amount is the server's to bill from the rental time too.
@@ -296,7 +300,7 @@ describe('creating an Order from the panel', () => {
     const { orders } = bodyOf<{ orders: PanelOrder[] }>(await call(app.port, '/orders', { cookie }))
     // Newest first, which is what makes the freshly created Order the one the
     // Agent's next unfiltered query offers.
-    expect(orders.map(order => order.orderId)).toEqual([created.orderId, 'ord-silver-1', 'ord-silver-2'])
+    expect(orders.map(order => order.orderId)).toEqual([created.orderId, OPEN_ORDER, CLOSED_ORDER])
   })
 })
 
@@ -345,7 +349,7 @@ describe('returning an Order from the panel', () => {
     // place to learn which Order numbers exist.
     expect((await closeOrder(app, cookie, OTHER_CUSTOMERS_ORDER)).status).toBe(404)
     expect(app.order(gold.customerId, OTHER_CUSTOMERS_ORDER)?.status).toBe('in_progress')
-    expect((await closeOrder(app, cookie, 'ord-nope')).status).toBe(404)
+    expect((await closeOrder(app, cookie, MISSING_ORDER)).status).toBe(404)
     for (const body of [{}, { orderId: '' }, { orderId: 42 }, { orderId: OPEN_ORDER, force: true }]) {
       expect((await call(app.port, '/orders/return', { method: 'POST', cookie, body })).status, JSON.stringify(body))
         .toBe(400)
@@ -363,7 +367,7 @@ describe('an Order refunded under the old model', () => {
     // left at 已归还. Nothing in the plugins can produce that pair any more, so
     // the row is written straight into the table.
     await writeStoredOrder(storageRoot, {
-      orderId: 'ord-legacy',
+      orderId: STORED_ORDER,
       customerId: silver.customerId,
       location: '万象城购物中心 B1 层服务台',
       amountCents: 300,
@@ -373,7 +377,7 @@ describe('an Order refunded under the old model', () => {
     })
 
     const second = await boot({ storageRoot })
-    expect(second.order(silver.customerId, 'ord-legacy')).toMatchObject({
+    expect(second.order(silver.customerId, STORED_ORDER)).toMatchObject({
       status: 'refunded',
       refundedAt: '2026-10-09T10:00:00.000+08:00',
     })
@@ -381,7 +385,7 @@ describe('an Order refunded under the old model', () => {
     // happens to carry a refund time.
     const { cookie } = await login(second.port, silver)
     const { orders } = bodyOf<{ orders: PanelOrder[] }>(await call(second.port, '/orders', { cookie }))
-    expect(orders.find(order => order.orderId === 'ord-legacy')).toMatchObject({ statusLabel: '已退款' })
+    expect(orders.find(order => order.orderId === STORED_ORDER)).toMatchObject({ statusLabel: '已退款' })
   })
 })
 

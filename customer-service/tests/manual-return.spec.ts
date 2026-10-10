@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { DEMO_ORDERS } from '../plugins/store/index.js'
-import { call, disposeAll } from './support.js'
+import { MISSING_ORDER, call, disposeAll } from './support.js'
 import { boot, demoAccount, login, outcomeOrder, outcomeText, outcomeValue, waitForQuestion } from './composition.js'
 import type { Booted } from './composition.js'
 
@@ -19,13 +19,13 @@ import type { Booted } from './composition.js'
 const CUSTOMER = 'cust-silver'
 
 /** Silver's in-progress Order: the one 人工还宝 is exercised on. */
-const ORDER = 'ord-silver-1'
+const ORDER = 'cbb14662-4d88-4361-9710-9a4229c1c960'
 
 /** Silver's other Order, already 已归还. */
-const RETURNED_ORDER = 'ord-silver-2'
+const RETURNED_ORDER = 'a5ca2d55-ff76-4f63-8b51-96f7a0df182c'
 
 /** Gold's in-progress Order, which silver's Session must never reach. */
-const OTHER_CUSTOMERS_ORDER = 'ord-gold-1'
+const OTHER_CUSTOMERS_ORDER = '33163a30-6164-43d5-b2b3-c5e1b377d219'
 
 /** The instant {@link ORDER} was rented, as the seeded row records it. */
 const RENTED_AT = Date.parse(seededOrder(ORDER).rentedAt)
@@ -68,7 +68,7 @@ const silver = demoAccount('silver')
 const platinum = demoAccount('platinum')
 
 /** Platinum's returned Order, which a refund moves on to 已退款. */
-const PLATINUM_RETURNED = 'ord-platinum-2'
+const PLATINUM_RETURNED = '9a83ac26-7657-48c2-91b8-4d15baedd6e8'
 
 /** Both tools this issue adds; each is driven against the same Order. */
 const NEW_TOOLS = ['validate_manual_return', 'manual_return']
@@ -413,9 +413,9 @@ describe('manual_return', () => {
     vi.setSystemTime(WINDOW_CLOSES)
 
     for (const name of NEW_TOOLS) {
-      const outcome = await run(app, caller, name, { orderId: 'ord-nobody' })
+      const outcome = await run(app, caller, name, { orderId: MISSING_ORDER })
       expect(outcome.isError).toBe(true)
-      expect(outcomeText(outcome)).toContain('ord-nobody')
+      expect(outcomeText(outcome)).toContain(MISSING_ORDER)
       expect(outcomeText(outcome)).toContain('不存在')
     }
   })

@@ -9,12 +9,15 @@
  *     the conversation is neither visible nor reachable, and carries the login
  *     form with the demo credentials; once a login is live it renders nothing.
  *   - `sidebar` is the frame's whole left column, which this file takes over
- *     (issue #4): the Customer's account name, VIP tier and the way out. The
- *     shipped occupant is registered at the default priority 0, so this file
+ *     (issue #4): the Customer's initial and the way out, with the account name
+ *     and VIP tier on the circle's hover card rather than written out beside it.
+ *     The shipped occupant is registered at the default priority 0, so this file
  *     registers at priority -1 — the lowest-priority live entry of a single slot
  *     renders (see ADR-0007). The native navigation — session list, workspaces,
  *     settings — stops rendering with it, and while nobody is logged in the
  *     occupant renders nothing at all.
+ *   - `conversation.header.leading` is the demo's name, laid over the view tab
+ *     strip: the row above 对话 and 轨迹 reads as the page's title.
  *   - `conversation.view` is the panel (issue #9): a third tab in the row 对话
  *     and 轨迹 share, whose body takes the center pane while it is selected. It
  *     lists the logged-in Customer's own Orders, creates one, and returns one,
@@ -53,6 +56,8 @@ window.__ModuleLoader__.load({
 
     /** Route prefix of the customer-service HTTP routes. */
     const ROUTE_PREFIX = '/customer-service'
+    /** What the demo is called, over the view tabs. */
+    const BRAND = '共享充电宝智能客服'
     /** Key the shell persists the selected Session under. */
     const CURRENT_SESSION_KEY = 'dsh.sessions.current'
     /** Shown for any rejected credential pair; names neither field, on purpose. */
@@ -373,40 +378,67 @@ window.__ModuleLoader__.load({
   font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .cs-sidebar--rail { align-items: center; padding: 14px 6px; gap: 10px; }
-/* 56px fits an initial, not a name; the account name rides on the tooltip. */
-.cs-sidebar__avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  inline-size: 30px;
-  block-size: 30px;
-  border-radius: 50%;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-.cs-sidebar__brand { font-size: 14px; font-weight: 600; }
-.cs-sidebar__account { display: flex; flex-direction: column; gap: 6px; min-inline-size: 0; }
-.cs-sidebar__name {
-  font-weight: 600;
+.cs-sidebar__spacer { flex: 1; min-block-size: 0; }
+/* The whole of who is signed in: an initial, and a card on hover. Nothing else
+   in the column names the account, so the circle has to read as something to
+   point at — hence the highlight on hover and the same one on focus, which is
+   how a keyboard reaches the card. */
+.cs-visuallyHidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
-.cs-sidebar__badges { display: flex; flex-wrap: wrap; gap: 6px; }
-.cs-sidebar__spacer { flex: 1; min-block-size: 0; }
-.cs-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-}
-.cs-badge--tier {
-  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+.cs-avatar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  inline-size: 34px;
+  block-size: 34px;
+  border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 32%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
   color: var(--dsw-alias-state-business-primary);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+  transition: background-color .15s ease, border-color .15s ease;
 }
+.cs-avatar:hover, .cs-avatar:focus-visible {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 20%, transparent);
+  outline: none;
+}
+/* Fixed and portalled to the body: the column clips its own overflow, and the
+   rail is 56px wide, so a card laid out inside it would be cut in half. */
+.cs-avatarCard {
+  position: fixed;
+  z-index: 1600;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* Placed at the circle's own middle, so it reads as a label for it. */
+  transform: translateY(-50%);
+  padding: 9px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .16);
+  color: var(--dsw-alias-label-primary);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.cs-avatarCard__name { font-weight: 600; }
+.cs-avatarCard__tier { color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .cs-sidebar__error { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 .cs-signout {
   padding: 8px 12px;
@@ -422,6 +454,30 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-primary);
 }
 .cs-signout--rail { inline-size: 100%; padding: 8px 0; font-size: 12px; }
+`
+
+    // The header's leading seat holds no box of its own — the brand is laid over
+    // the header instead, because the seat is a grid column and the header's rows
+    // are fixed heights that nothing may grow (ConversationRoot.module.css).
+    const HEADER_CSS = `
+.cs-brand {
+  position: absolute;
+  /* The header's own 10px top inset and its 30px title row: the text sits on
+     the row above the tab strip, centered over the strip's own width. */
+  top: 10px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  block-size: 30px;
+  transform: translateX(-50%);
+  color: var(--dsw-alias-label-primary);
+  font: 600 15px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  /* The row is the window's drag band on the desktop shell, and the session
+     title and its controls sit in it: the brand must not take a click. */
+  pointer-events: none;
+}
 `
 
     // The order card sits in the conversation, not in a themed frame column, so
@@ -527,6 +583,7 @@ window.__ModuleLoader__.load({
 }
 .cs-panel__title { font-size: 15px; font-weight: 600; }
 .cs-panel__notice { color: var(--dsw-alias-state-business-primary); }
+.cs-panel__actions { display: flex; gap: 8px; }
 .cs-panel__list { display: flex; flex-direction: column; gap: 10px; }
 .cs-panel__orderHead {
   display: flex;
@@ -675,6 +732,11 @@ window.__ModuleLoader__.load({
 
     /**
      * The left column's occupant: who the Customer is, and the way out.
+     *
+     * The column carries the initial alone. The account name and the VIP tier —
+     * and nothing about roles, which is the server's business rather than the
+     * Customer's — are on a card the circle shows on hover or focus, so the
+     * corner stays one mark wide at every column width.
      * @param props - the slot owner's share: the frame's live column state.
      * @returns the column, or `null` while nobody is logged in.
      */
@@ -682,6 +744,8 @@ window.__ModuleLoader__.load({
       const { phase, customer } = useCustomerSession()
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
+      const [card, setCard] = useState(null)
+      const circle = useRef(null)
 
       const leave = useCallback(() => {
         if (busy) return
@@ -694,13 +758,22 @@ window.__ModuleLoader__.load({
         })
       }, [busy])
 
+      // The card is measured from the circle rather than laid out beside it:
+      // the column clips its overflow and the collapsed rail is 56px wide, so
+      // only a fixed-position card can hang outside it at both widths.
+      const showCard = useCallback(() => {
+        const box = circle.current?.getBoundingClientRect()
+        if (box === undefined) return
+        setCard({ left: `${box.right + 10}px`, top: `${box.top + box.height / 2}px` })
+      }, [])
+      const hideCard = useCallback(() => {
+        setCard(null)
+      }, [])
+
       if (phase !== 'authenticated' || customer === null) return null
 
-      const tier = h('span', { className: 'cs-badge cs-badge--tier', 'data-customer-service-tier': '' },
-        customer.tierLabel)
-
       // The rail is 56px wide and clips, so the failure message rides on the
-      // tooltip there and gets a line of its own in the full column.
+      // button's tooltip there and gets a line of its own in the full column.
       const signOutButton = (className, label) => h('button', {
         type: 'button',
         className,
@@ -709,35 +782,54 @@ window.__ModuleLoader__.load({
         onClick: leave,
       }, label)
 
-      if (collapsed) {
-        // The frame collapses the column and clips it; the occupant owns what
-        // the rail shows. The name is one initial wide, so the full account name
-        // is the tooltip's job here.
-        return h('div', { className: 'cs-sidebar cs-sidebar--rail', 'data-customer-service-sidebar': 'rail' },
-          h('div', {
-            className: 'cs-sidebar__avatar',
-            title: customer.accountName,
-            'data-customer-service-account': '',
-          }, customer.accountName.slice(0, 1).toUpperCase()),
-          tier,
-          h('div', { className: 'cs-sidebar__spacer' }),
-          signOutButton('cs-signout cs-signout--rail', '退出'),
-        )
-      }
-
-      return h('div', { className: 'cs-sidebar', 'data-customer-service-sidebar': 'full' },
-        h('div', { className: 'cs-sidebar__brand' }, '共享充电宝智能客服'),
-        h('div', { className: 'cs-sidebar__account', 'data-customer-service-account': '' },
-          h('div', { className: 'cs-sidebar__name' }, customer.accountName),
-          h('div', { className: 'cs-sidebar__badges' },
-            tier,
-            customer.isAdmin ? h('span', { className: 'cs-badge' }, '管理员') : null,
-          ),
-        ),
-        h('div', { className: 'cs-sidebar__spacer' }),
-        error === '' ? null : h('div', { className: 'cs-sidebar__error', role: 'alert' }, error),
-        signOutButton('cs-signout', '退出登录'),
+      return h('div', {
+        className: collapsed ? 'cs-sidebar cs-sidebar--rail' : 'cs-sidebar',
+        'data-customer-service-sidebar': collapsed ? 'rail' : 'full',
+      },
+      h('div', {
+        ref: circle,
+        className: 'cs-avatar',
+        'data-customer-service-account': '',
+        tabIndex: 0,
+        onMouseEnter: showCard,
+        onMouseLeave: hideCard,
+        onFocus: showCard,
+        onBlur: hideCard,
+      },
+      customer.accountName.slice(0, 1).toUpperCase(),
+      // The circle says everything the card does, for whoever cannot see it:
+      // the card is the same two facts drawn beside the mark, so it is hidden
+      // from assistive technology rather than read twice.
+      h('span', { className: 'cs-visuallyHidden' },
+        `当前账号 ${customer.accountName}，VIP 等级 ${customer.tierLabel}`),
+      ),
+      h('div', { className: 'cs-sidebar__spacer' }),
+      error === '' ? null : h('div', { className: 'cs-sidebar__error', role: 'alert' }, error),
+      signOutButton(collapsed ? 'cs-signout cs-signout--rail' : 'cs-signout', collapsed ? '退出' : '退出登录'),
+      card === null ? null : createPortal(h('div', {
+        className: 'cs-avatarCard',
+        'aria-hidden': 'true',
+        style: card,
+        'data-customer-service-account-card': '',
+      },
+      h('div', { className: 'cs-avatarCard__name' }, customer.accountName),
+      h('div', { className: 'cs-avatarCard__tier' }, `VIP 等级：${customer.tierLabel}`),
+      ), document.body),
       )
+    }
+
+    /**
+     * The demo's name, centered over the row that holds the view tabs.
+     *
+     * It rides the header's leading seat, which is the only seat the frame
+     * leaves above the tab strip. The seat is a grid column — one whose width
+     * the header's own layout solves — so the brand is taken out of that flow
+     * and positioned against the conversation column instead (the column is the
+     * positioning context its own stylesheet publishes for slot chrome).
+     * @returns the brand.
+     */
+    function BrandTitle() {
+      return h('div', { className: 'cs-brand', 'data-customer-service-brand': '' }, BRAND)
     }
 
     /**
@@ -1317,6 +1409,15 @@ window.__ModuleLoader__.load({
         }, 'customer-service-ui: sidebar styles')
         ctx.effect(() => {
           const style = document.createElement('style')
+          style.dataset.customerService = 'header'
+          style.textContent = HEADER_CSS
+          document.head.append(style)
+          return () => {
+            style.remove()
+          }
+        }, 'customer-service-ui: header styles')
+        ctx.effect(() => {
+          const style = document.createElement('style')
           style.dataset.customerService = 'order'
           style.textContent = ORDER_CSS
           document.head.append(style)
@@ -1345,6 +1446,10 @@ window.__ModuleLoader__.load({
           name: 'sidebar',
           priority: -1,
         }, CustomerSidebar))
+        // The seat above the view tabs, which the shipped chrome leaves empty.
+        ctx.slots.inject('conversation.header.leading', () => ctx.slots.register({
+          name: 'conversation.header.leading',
+        }, BrandTitle))
         // The panel is a Conversation View: a third tab in the row 对话 and 轨迹
         // share, whose body takes the center pane while it is selected. The
         // shipped views sit at orders 0 and 10, so 20 puts this one last, to

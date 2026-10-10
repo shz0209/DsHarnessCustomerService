@@ -248,6 +248,18 @@ export async function boot(options: BootOptions = {}): Promise<Booted> {
 }
 
 /**
+ * A storage root with nothing in it: what a test writes a row into when the
+ * rows a composition would seed must not already be there.
+ *
+ * The directory is removed with the composition booted against it, so the
+ * caller has nothing to clean up.
+ * @returns the path to an empty backend root.
+ */
+export function newStorageRoot(): string {
+  return mkdtempSync(join(tmpdir(), 'customer-service-test-'))
+}
+
+/**
  * Write one Order row straight into the table, the way a database written by an
  * earlier build of these plugins holds it.
  *

@@ -15,13 +15,13 @@ _Avoid_: User, 用户 — the harness already uses "user" for its own identity a
 The AI customer service agent a Customer converses with. Distinct from a Customer.
 
 **Administrator** (管理员):
-A Customer whose account carries an admin flag. Not a separate kind of account, and nothing in the demo requires one: the flag is a label the sidebar and the Agent's identity line show.
+A Customer whose account carries an admin flag. Not a separate kind of account, and nothing in the demo requires one: the flag is a label the Agent's identity line shows, and the browser shows nothing about it — the panel is per-customer, so an Administrator has no extra reach.
 
 ### Rental
 
 **Order** (订单):
 One power bank rental: a customer takes a power bank from a location and is expected to return it to a location.
-Carries 订单号, 金额, 租借时间, 租借地点, customerId and status; a closed Order may also carry 归还时间, and a refunded one 退款时间. A Customer may have many Orders.
+Carries 订单号 (a UUID, minted by the store), 金额, 租借时间, 租借地点, customerId and status; a closed Order may also carry 归还时间, and a refunded one 退款时间. A Customer may have many Orders.
 
 **Order status** (订单状态):
 `进行中` (in progress) — the power bank is out with the Customer.

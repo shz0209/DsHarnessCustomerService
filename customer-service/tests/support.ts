@@ -11,6 +11,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
+/**
+ * The shape of an Order number: the UUID `plugins/store` mints for every row,
+ * seeded or created. Written out here rather than imported from the store so
+ * the format these suites pin is their own statement of it.
+ */
+export const ORDER_NUMBER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * An Order number no row holds, shaped like one that could: what a route is
+ * asked for when the answer is meant to be "there is no such Order".
+ */
+export const MISSING_ORDER = '00000000-0000-4000-8000-000000000000'
+
 /** One stored Order row, as `plugins/store` returns it. */
 export interface StoredOrder {
   readonly orderId: string

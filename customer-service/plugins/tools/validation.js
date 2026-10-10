@@ -279,7 +279,7 @@ function parseOrderId(args) {
     throw new TypeError(`未知参数：${unknown.join('、')}。本工具只接受 ${ORDER_PARAMETER}，没有客户参数——身份来自当前登录。`)
   }
   if (typeof args.orderId !== 'string' || args.orderId.trim() === '') {
-    throw new TypeError(`${ORDER_PARAMETER} 必须是非空字符串，例如 ord-silver-1。`)
+    throw new TypeError(`${ORDER_PARAMETER} 必须是非空字符串，例如 cbb14662-4d88-4361-9710-9a4229c1c960。`)
   }
   return args.orderId.trim()
 }

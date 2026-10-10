@@ -14,7 +14,7 @@
  * The repository root has `zod`, so Node resolves it from here even though this
  * directory is not a workspace member (ADR-0006).
  */
-import { randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { hashPassword, verifyPassword } from './passwords.js'
 import { ORDER_STATUSES, TIERS } from '../shared/vocabulary.js'
@@ -41,7 +41,8 @@ const customerRecord = z.object({
 })
 
 /**
- * One Order row. `orderId` is the key, so it is also stored in the value.
+ * One Order row. `orderId` is the key, so it is also stored in the value; it is
+ * a UUID, minted by this plugin and never by a caller or a request body.
  *
  * `amountCents` is an integer so a demo about money never rounds, and
  * `rentedAt` is an offset-carrying ISO-8601 timestamp so the card shows the
@@ -80,6 +81,35 @@ export const customerDomain = {
 }
 
 /**
+ * The shape of an Order number: what `randomUUID()` mints.
+ *
+ * A number that does not read as one is a number this build did not write,
+ * which is what {@link carryOrderNumbersForward} looks for.
+ */
+const ORDER_NUMBER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * The number each seeded Order carried before Order numbers were UUIDs, and the
+ * number it carries now.
+ *
+ * The old numbers name the same rows in an existing demo database; the mapping
+ * is what lets the change land on the rows already there instead of beside them.
+ */
+const FORMER_DEMO_ORDER_NUMBERS = new Map([
+  ['ord-silver-1', 'cbb14662-4d88-4361-9710-9a4229c1c960'],
+  ['ord-silver-2', 'a5ca2d55-ff76-4f63-8b51-96f7a0df182c'],
+  ['ord-gold-1', '33163a30-6164-43d5-b2b3-c5e1b377d219'],
+  ['ord-gold-2', '442b2a2c-b8f9-4b65-9c65-df4f3319d947'],
+  ['ord-platinum-1', '9233d92c-3a2f-487e-8af6-e6556c0e478d'],
+  ['ord-platinum-2', '9a83ac26-7657-48c2-91b8-4d15baedd6e8'],
+  ['ord-black-gold-1', '92dfba28-f40c-486f-8709-6362bfb93c5f'],
+  ['ord-black-gold-2', 'd62e2d37-0c5a-4c73-b007-cb4acd8bd9fc'],
+  ['ord-black-gold-3', '6a4227b1-0b95-443f-97fa-a3433eaa7cea'],
+  ['ord-black-gold-4', '73d2144d-1701-4fd5-9de0-469163c0c20c'],
+  ['ord-black-gold-5', '33b8d967-5741-4f78-b189-10ca0ecfcf23'],
+])
+
+/**
  * The four demo accounts, one per VIP tier, with the highest tier doubling as
  * the Administrator. The passwords are demo credentials: they are listed in the
  * README and on the login page, and stored in the table only as salted hashes.
@@ -107,17 +137,17 @@ export const DEMO_ACCOUNTS = [
  * following the clock.
  */
 export const DEMO_ORDERS = [
-  { orderId: 'ord-silver-1', customerId: 'cust-silver', location: '万象城购物中心 B1 层服务台', amountCents: 300, rentedAt: '2026-10-08T19:24:00+08:00', status: 'in_progress' },
-  { orderId: 'ord-silver-2', customerId: 'cust-silver', location: '深圳北站候车厅 3 号点位', amountCents: 1200, rentedAt: '2026-09-21T08:05:00+08:00', status: 'returned' },
-  { orderId: 'ord-gold-1', customerId: 'cust-gold', location: '海岸城购物中心 4 楼电梯口', amountCents: 400, rentedAt: '2026-10-07T13:40:00+08:00', status: 'in_progress' },
-  { orderId: 'ord-gold-2', customerId: 'cust-gold', location: '科技园地铁站 A 出口', amountCents: 600, rentedAt: '2026-09-30T21:12:00+08:00', status: 'returned' },
-  { orderId: 'ord-platinum-1', customerId: 'cust-platinum', location: '华强北电子市场 2 号门', amountCents: 200, rentedAt: '2026-10-09T10:15:00+08:00', status: 'in_progress' },
-  { orderId: 'ord-platinum-2', customerId: 'cust-platinum', location: '深圳湾公园欢乐海岸入口', amountCents: 900, rentedAt: '2026-09-12T16:48:00+08:00', status: 'returned' },
-  { orderId: 'ord-black-gold-1', customerId: 'cust-black-gold', location: '宝安国际机场 T3 到达厅', amountCents: 500, rentedAt: '2026-10-06T22:30:00+08:00', status: 'in_progress' },
-  { orderId: 'ord-black-gold-2', customerId: 'cust-black-gold', location: '前海壹方城 B2 停车场', amountCents: 1500, rentedAt: '2026-08-28T11:20:00+08:00', status: 'returned' },
-  { orderId: 'ord-black-gold-3', customerId: 'cust-black-gold', location: '深南大道腾讯大厦 1 楼大堂', amountCents: 400, rentedAt: '2026-10-09T09:12:00+08:00', status: 'returned' },
-  { orderId: 'ord-black-gold-4', customerId: 'cust-black-gold', location: '深圳湾万象城 3 号门', amountCents: 800, rentedAt: '2026-10-09T13:05:00+08:00', status: 'returned' },
-  { orderId: 'ord-black-gold-5', customerId: 'cust-black-gold', location: '车公庙地铁站 C 出口', amountCents: 600, rentedAt: '2026-10-09T18:40:00+08:00', status: 'in_progress' },
+  { orderId: 'cbb14662-4d88-4361-9710-9a4229c1c960', customerId: 'cust-silver', location: '万象城购物中心 B1 层服务台', amountCents: 300, rentedAt: '2026-10-08T19:24:00+08:00', status: 'in_progress' },
+  { orderId: 'a5ca2d55-ff76-4f63-8b51-96f7a0df182c', customerId: 'cust-silver', location: '深圳北站候车厅 3 号点位', amountCents: 1200, rentedAt: '2026-09-21T08:05:00+08:00', status: 'returned' },
+  { orderId: '33163a30-6164-43d5-b2b3-c5e1b377d219', customerId: 'cust-gold', location: '海岸城购物中心 4 楼电梯口', amountCents: 400, rentedAt: '2026-10-07T13:40:00+08:00', status: 'in_progress' },
+  { orderId: '442b2a2c-b8f9-4b65-9c65-df4f3319d947', customerId: 'cust-gold', location: '科技园地铁站 A 出口', amountCents: 600, rentedAt: '2026-09-30T21:12:00+08:00', status: 'returned' },
+  { orderId: '9233d92c-3a2f-487e-8af6-e6556c0e478d', customerId: 'cust-platinum', location: '华强北电子市场 2 号门', amountCents: 200, rentedAt: '2026-10-09T10:15:00+08:00', status: 'in_progress' },
+  { orderId: '9a83ac26-7657-48c2-91b8-4d15baedd6e8', customerId: 'cust-platinum', location: '深圳湾公园欢乐海岸入口', amountCents: 900, rentedAt: '2026-09-12T16:48:00+08:00', status: 'returned' },
+  { orderId: '92dfba28-f40c-486f-8709-6362bfb93c5f', customerId: 'cust-black-gold', location: '宝安国际机场 T3 到达厅', amountCents: 500, rentedAt: '2026-10-06T22:30:00+08:00', status: 'in_progress' },
+  { orderId: 'd62e2d37-0c5a-4c73-b007-cb4acd8bd9fc', customerId: 'cust-black-gold', location: '前海壹方城 B2 停车场', amountCents: 1500, rentedAt: '2026-08-28T11:20:00+08:00', status: 'returned' },
+  { orderId: '6a4227b1-0b95-443f-97fa-a3433eaa7cea', customerId: 'cust-black-gold', location: '深南大道腾讯大厦 1 楼大堂', amountCents: 400, rentedAt: '2026-10-09T09:12:00+08:00', status: 'returned' },
+  { orderId: '73d2144d-1701-4fd5-9de0-469163c0c20c', customerId: 'cust-black-gold', location: '深圳湾万象城 3 号门', amountCents: 800, rentedAt: '2026-10-09T13:05:00+08:00', status: 'returned' },
+  { orderId: '33b8d967-5741-4f78-b189-10ca0ecfcf23', customerId: 'cust-black-gold', location: '车公庙地铁站 C 出口', amountCents: 600, rentedAt: '2026-10-09T18:40:00+08:00', status: 'in_progress' },
 ]
 
 /**
@@ -130,6 +160,10 @@ export async function apply(ctx) {
   ctx.effect(() => () => domain.close(), 'customer-service-store: close domain')
   const customers = domain.table(CUSTOMERS_TABLE)
   const orders = domain.table(ORDERS_TABLE)
+  // Before seeding: a database seeded by an earlier build still holds the rows
+  // under their old numbers, and seeding first would add the new numbers beside
+  // them rather than finding them.
+  await carryOrderNumbersForward(orders)
   await seed(customers, DEMO_ACCOUNTS, 'customerId', account => ({
     customerId: account.customerId,
     accountName: account.accountName,
@@ -279,7 +313,8 @@ export async function apply(ctx) {
      * The status is not a parameter: an Order the panel creates is one the
      * power bank is still out with, which is the state the two-hour rule is
      * demonstrated from. The number is minted here rather than accepted from
-     * the caller so the table's key space stays this plugin's to keep unique.
+     * the caller so the table's key space stays this plugin's to keep unique,
+     * and it is a UUID, which is unique without a check against the table.
      * @param input - the owning Customer, the rental location, the amount in
      *   integer cents, and the rental time as an offset-carrying ISO-8601 stamp.
      * @returns the stored Order, or `undefined` when no such Customer exists
@@ -288,7 +323,7 @@ export async function apply(ctx) {
     async createOrder(input) {
       if (customers.get(input.customerId) === undefined) return undefined
       const order = {
-        orderId: mintOrderId(orders),
+        orderId: randomUUID(),
         customerId: input.customerId,
         location: input.location,
         amountCents: input.amountCents,
@@ -322,23 +357,6 @@ export async function apply(ctx) {
       return { ok: true, order: updated }
     },
   })
-}
-
-/** Order numbers minted per attempt before the plugin gives up and fails loud. */
-const ORDER_ID_ATTEMPTS = 16
-
-/**
- * Mint an Order number no row holds.
- * @param orders - the open `orders` table.
- * @returns the number, e.g. `ord-9f3c1a04`.
- * @throws {Error} when every attempt drew a number already in the table.
- */
-function mintOrderId(orders) {
-  for (let attempt = 0; attempt < ORDER_ID_ATTEMPTS; attempt += 1) {
-    const orderId = `ord-${randomBytes(4).toString('hex')}`
-    if (orders.get(orderId) === undefined) return orderId
-  }
-  throw new Error('customer-service-store: every minted Order number was already taken')
 }
 
 /**
@@ -401,6 +419,33 @@ async function seed(table, demos, keyField, project) {
     const record = project(demo)
     if (table.get(record[keyField]) !== undefined) continue
     await table.put(record[keyField], record)
+  }
+}
+
+/**
+ * Bring Order numbers written before they were UUIDs forward.
+ *
+ * A demo database outlives the change: a row seeded by an earlier build holds
+ * `ord-silver-1` where this one holds a UUID. Each such number is re-minted
+ * under the row's own key, taking the row with it — its status, its 归还时间, its
+ * 退款时间 — so a Customer's demo state survives the change. The seeded rows land
+ * on the numbers {@link DEMO_ORDERS} names, which is what lets the seeding that
+ * follows recognise them as the rows already there; an Order the panel created
+ * lands on a fresh UUID, which nothing else reads.
+ *
+ * Runs before seeding and walks a snapshot: it writes under new keys as it
+ * deletes the old ones.
+ * @param table - the open `orders` table.
+ */
+async function carryOrderNumbersForward(table) {
+  for (const [orderId, order] of [...table.entries()]) {
+    if (ORDER_NUMBER.test(orderId)) continue
+    const number = FORMER_DEMO_ORDER_NUMBERS.get(orderId) ?? randomUUID()
+    // A former number standing beside the number it became means an earlier
+    // build seeded it a second time; the row already there is the live one, so
+    // the stale copy is dropped rather than written over it.
+    if (table.get(number) === undefined) await table.put(number, { ...order, orderId: number })
+    await table.delete(orderId)
   }
 }
 

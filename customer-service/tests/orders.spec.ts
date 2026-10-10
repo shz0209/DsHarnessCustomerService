@@ -12,13 +12,28 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { DEMO_ACCOUNTS, DEMO_ORDERS } from '../plugins/store/index.js'
-import { bodyOf, call, disposeAll } from './support.js'
-import { boot, demoAccount, login, outcomeOrder, outcomeText, waitForQuestion } from './composition.js'
+import { ORDER_NUMBER, bodyOf, call, disposeAll } from './support.js'
+import {
+  boot, demoAccount, login, newStorageRoot, outcomeOrder, outcomeText, waitForQuestion, writeStoredOrder,
+} from './composition.js'
 import type { OrderQuestion } from './composition.js'
 
 /** One demo account's credentials, as the login route takes them. */
 const silver = demoAccount('silver')
 const gold = demoAccount('gold')
+
+/** The seeded Order numbers these tests name, by the Customer and the state. */
+const SILVER_OPEN = 'cbb14662-4d88-4361-9710-9a4229c1c960'
+const SILVER_RETURNED = 'a5ca2d55-ff76-4f63-8b51-96f7a0df182c'
+const GOLD_OPEN = '33163a30-6164-43d5-b2b3-c5e1b377d219'
+const GOLD_RETURNED = '442b2a2c-b8f9-4b65-9c65-df4f3319d947'
+
+/** blackgold's three Orders of 2026-10-09 — 腾讯大厦, 万象城, 车公庙 — newest first. */
+const BLACK_GOLD_TODAY = [
+  '33b8d967-5741-4f78-b189-10ca0ecfcf23',
+  '73d2144d-1701-4fd5-9de0-469163c0c20c',
+  '6a4227b1-0b95-443f-97fa-a3433eaa7cea',
+]
 
 /** Every tool this deployment allows, in the order the registry lists them. */
 const ALLOWED = ['search_orders', 'validate_manual_return', 'manual_return', 'validate_refund', 'refund']
@@ -40,7 +55,7 @@ describe('the seeded Orders', () => {
       expect(new Set(seeded.map(order => order.status))).toEqual(new Set(['in_progress', 'returned']))
       for (const order of orders) {
         expect(order).toMatchObject({ customerId: account.customerId })
-        expect(order.orderId).toMatch(/^ord-/)
+        expect(order.orderId).toMatch(ORDER_NUMBER)
         expect(order.location).not.toBe('')
         expect(order.amountCents).toBeGreaterThan(0)
         expect(Number.isFinite(Date.parse(order.rentedAt))).toBe(true)
@@ -60,7 +75,7 @@ describe('the seeded Orders', () => {
     })
     // Several Orders on one day, which is what makes a broad time query reach
     // the Card's "pick the one you mean" path.
-    expect(today.map(order => order.orderId)).toEqual(['ord-black-gold-5', 'ord-black-gold-4', 'ord-black-gold-3'])
+    expect(today.map(order => order.orderId)).toEqual(BLACK_GOLD_TODAY)
     expect(today.every(order => order.customerId === 'cust-black-gold')).toBe(true)
   })
 
@@ -71,6 +86,77 @@ describe('the seeded Orders', () => {
 
     const second = await boot({ storageRoot: first.storageRoot })
     expect(second.searchOrders(silver.customerId)).toEqual(before)
+  })
+})
+
+describe('Order numbers minted before they were UUIDs', () => {
+  /** Silver's newest Order, as a build from before this one seeded it. */
+  const seededByAnEarlierBuild = {
+    orderId: 'ord-silver-1',
+    customerId: 'cust-silver',
+    location: '万象城购物中心 B1 层服务台',
+    amountCents: 300,
+    rentedAt: '2026-10-08T19:24:00+08:00',
+    status: 'returned',
+    returnedAt: '2026-10-08T20:00:00.000+08:00',
+  }
+
+  it('carries a seeded row to the number it carries now, keeping its state', async () => {
+    const storageRoot = newStorageRoot()
+    await writeStoredOrder(storageRoot, seededByAnEarlierBuild)
+
+    const app = await boot({ storageRoot })
+    // The row moved, rather than being replaced by the seeded one: the 归还时间
+    // a demo recorded is still there, and 进行中 is not written over it.
+    expect(app.order(silver.customerId, SILVER_OPEN)).toMatchObject({
+      status: 'returned',
+      returnedAt: '2026-10-08T20:00:00.000+08:00',
+    })
+    expect(app.searchOrders(silver.customerId).map(order => order.orderId))
+      .toEqual([SILVER_OPEN, SILVER_RETURNED])
+  })
+
+  it('gives an Order the panel created its own UUID', async () => {
+    const storageRoot = newStorageRoot()
+    await writeStoredOrder(storageRoot, {
+      orderId: 'ord-1a2b3c4d',
+      customerId: 'cust-silver',
+      location: '会展中心地铁站 D 出口',
+      amountCents: 600,
+      rentedAt: '2026-10-10T09:00:00+08:00',
+      status: 'in_progress',
+    })
+
+    const app = await boot({ storageRoot })
+    const created = app.searchOrders(silver.customerId, { location: '会展中心' })
+    expect(created).toHaveLength(1)
+    // Nothing names the number it carried, so it is re-minted rather than
+    // mapped — and it is still the row the panel wrote.
+    expect(created[0]!.orderId).toMatch(ORDER_NUMBER)
+    expect(created[0]).toMatchObject({ amountCents: 600, status: 'in_progress' })
+  })
+
+  it('drops a former number that turns up beside the row it became', async () => {
+    const storageRoot = newStorageRoot()
+    // Running an earlier build against a database that has already been carried
+    // forward seeds the old number again: one rental, two rows.
+    await writeStoredOrder(storageRoot, seededByAnEarlierBuild)
+    // The row this build carries it under, closed an hour later.
+    await writeStoredOrder(storageRoot, {
+      ...seededByAnEarlierBuild,
+      orderId: SILVER_OPEN,
+      returnedAt: '2026-10-08T21:00:00.000+08:00',
+    })
+
+    const app = await boot({ storageRoot })
+    // The row already there is the live one, so the copy the seeding found goes
+    // rather than standing beside it: silver still has the two Orders the demo
+    // gives them, and the later return time is the one that stands.
+    expect(app.order(silver.customerId, SILVER_OPEN)).toMatchObject({
+      returnedAt: '2026-10-08T21:00:00.000+08:00',
+    })
+    expect(app.searchOrders(silver.customerId).map(order => order.orderId))
+      .toEqual([SILVER_OPEN, SILVER_RETURNED])
   })
 })
 
@@ -90,15 +176,15 @@ describe('searchOrders', () => {
   it('matches a location by containment, newest first', async () => {
     const app = await boot()
     expect(app.searchOrders(silver.customerId, { location: '万象城' }).map(order => order.orderId))
-      .toEqual(['ord-silver-1'])
+      .toEqual([SILVER_OPEN])
     expect(app.searchOrders(silver.customerId, { location: '站' }).map(order => order.orderId))
-      .toEqual(['ord-silver-2'])
+      .toEqual([SILVER_RETURNED])
     // 购物中心 is one Customer's in-progress Order and another Customer's too,
     // but a query only ever sees its own.
     expect(app.searchOrders(silver.customerId, { location: '购物中心' }).map(order => order.orderId))
-      .toEqual(['ord-silver-1'])
+      .toEqual([SILVER_OPEN])
     expect(app.searchOrders(gold.customerId, { location: '购物中心' }).map(order => order.orderId))
-      .toEqual(['ord-gold-1'])
+      .toEqual([GOLD_OPEN])
     expect(app.searchOrders(silver.customerId, { location: '这地方不存在' })).toEqual([])
   })
 
@@ -107,16 +193,16 @@ describe('searchOrders', () => {
     const ids = (filter: Record<string, string>) =>
       app.searchOrders(silver.customerId, filter).map(order => order.orderId)
 
-    // The bounds are inclusive: this range is exactly ord-silver-2's instant.
+    // The bounds are inclusive: this range is exactly a5ca2d55-ff76-4f63-8b51-96f7a0df182c's instant.
     expect(ids({ rentedFrom: '2026-09-21T08:05:00+08:00', rentedTo: '2026-09-21T08:05:00+08:00' }))
-      .toEqual(['ord-silver-2'])
+      .toEqual([SILVER_RETURNED])
     expect(ids({ rentedFrom: '2026-09-21T08:04:59+08:00', rentedTo: '2026-09-21T08:05:01+08:00' }))
-      .toEqual(['ord-silver-2'])
-    expect(ids({ rentedFrom: '2026-09-21T08:05:01+08:00' })).toEqual(['ord-silver-1'])
+      .toEqual([SILVER_RETURNED])
+    expect(ids({ rentedFrom: '2026-09-21T08:05:01+08:00' })).toEqual([SILVER_OPEN])
     expect(ids({ rentedTo: '2026-09-21T08:04:59+08:00' })).toEqual([])
     // Both bounds together, newest first.
     expect(ids({ rentedFrom: '2026-01-01T00:00:00+08:00', rentedTo: '2026-12-31T00:00:00+08:00' }))
-      .toEqual(['ord-silver-1', 'ord-silver-2'])
+      .toEqual([SILVER_OPEN, SILVER_RETURNED])
     expect(ids({ rentedFrom: '2026-01-01T00:00:00+08:00', rentedTo: '2026-01-31T00:00:00+08:00' })).toEqual([])
   })
 
@@ -127,7 +213,7 @@ describe('searchOrders', () => {
     // A range wide enough for every Order in the table still returns only this
     // Customer's two, and never another Customer's order id.
     const mine = app.searchOrders(silver.customerId, { rentedFrom: '2020-01-01T00:00:00Z' })
-    expect(mine.map(order => order.orderId)).toEqual(['ord-silver-1', 'ord-silver-2'])
+    expect(mine.map(order => order.orderId)).toEqual([SILVER_OPEN, SILVER_RETURNED])
     expect(mine.every(order => order.customerId === silver.customerId)).toBe(true)
     // An account with no Orders owns none.
     expect(app.searchOrders('cust-nobody')).toEqual([])
@@ -222,7 +308,7 @@ describe('search_orders', () => {
     expect(question.query).toEqual({})
     expect(question.candidates).toEqual([
       {
-        orderId: 'ord-silver-1',
+        orderId: SILVER_OPEN,
         location: '万象城购物中心 B1 层服务台',
         rentedAt: '2026-10-08T19:24:00+08:00',
         amountCents: 300,
@@ -234,7 +320,7 @@ describe('search_orders', () => {
     const answered = await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-1' },
+      body: { callId: 'call-1', orderId: SILVER_OPEN },
     })
     expect(answered.status).toBe(200)
     expect(answered.body).toEqual({ ok: true })
@@ -244,7 +330,7 @@ describe('search_orders', () => {
     expect(outcome.value).toEqual({
       outcome: 'selected',
       order: {
-        orderId: 'ord-silver-1',
+        orderId: SILVER_OPEN,
         location: '万象城购物中心 B1 层服务台',
         rentedAt: '2026-10-08T19:24:00+08:00',
         amountCents: 300,
@@ -266,15 +352,15 @@ describe('search_orders', () => {
     const running = app.execute('search_orders', { rentedFrom: '2026-01-01' }, caller, new AbortController().signal)
     const question = await waitForQuestion(app.port, cookie)
     expect(question.candidates.map(candidate => candidate.orderId))
-      .toEqual(['ord-silver-1', 'ord-silver-2'])
+      .toEqual([SILVER_OPEN, SILVER_RETURNED])
 
     await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-2' },
+      body: { callId: 'call-1', orderId: SILVER_RETURNED },
     })
     // The Order the Customer picked, not the newest one the query ranked first.
-    expect(outcomeOrder(await running)?.orderId).toBe('ord-silver-2')
+    expect(outcomeOrder(await running)?.orderId).toBe(SILVER_RETURNED)
   })
 
   it('narrows the candidates by location and by a whole-day time bound', async () => {
@@ -291,14 +377,14 @@ describe('search_orders', () => {
       rentedFrom: '2026-09-21T00:00:00.000+08:00',
       rentedTo: '2026-09-21T23:59:59.999+08:00',
     })
-    expect(question.candidates.map(candidate => candidate.orderId)).toEqual(['ord-silver-2'])
+    expect(question.candidates.map(candidate => candidate.orderId)).toEqual([SILVER_RETURNED])
 
     await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-2' },
+      body: { callId: 'call-1', orderId: SILVER_RETURNED },
     })
-    expect(outcomeOrder(await running)?.orderId).toBe('ord-silver-2')
+    expect(outcomeOrder(await running)?.orderId).toBe(SILVER_RETURNED)
   })
 
   it('reads a time with no offset as Beijing time, and keeps one that has it', async () => {
@@ -314,13 +400,13 @@ describe('search_orders', () => {
       return question
     }
 
-    // 08:05 with no offset is 08:05 in Beijing, which is when ord-silver-2 was
+    // 08:05 with no offset is 08:05 in Beijing, which is when a5ca2d55-ff76-4f63-8b51-96f7a0df182c was
     // rented — the same instant the seeded row records.
-    expect((await ask({ rentedFrom: '2026-09-21T08:05:00', rentedTo: '2026-09-21T08:05:00' }, 'ord-silver-2')).query)
+    expect((await ask({ rentedFrom: '2026-09-21T08:05:00', rentedTo: '2026-09-21T08:05:00' }, SILVER_RETURNED)).query)
       .toEqual({ rentedFrom: '2026-09-21T08:05:00.000+08:00', rentedTo: '2026-09-21T08:05:00.000+08:00' })
     // The same instant written in Z reaches the same Order; the offset the model
     // wrote is honoured rather than overruled.
-    expect((await ask({ rentedFrom: '2026-09-21T00:05:00Z', rentedTo: '2026-09-21T00:05:00Z' }, 'ord-silver-2')).query)
+    expect((await ask({ rentedFrom: '2026-09-21T00:05:00Z', rentedTo: '2026-09-21T00:05:00Z' }, SILVER_RETURNED)).query)
       .toEqual({ rentedFrom: '2026-09-21T08:05:00.000+08:00', rentedTo: '2026-09-21T08:05:00.000+08:00' })
   })
 
@@ -332,7 +418,7 @@ describe('search_orders', () => {
     const running = app.execute('search_orders', { location: '  地铁站  ' }, caller, new AbortController().signal)
     const question = await waitForQuestion(app.port, cookie)
     expect(question.query).toEqual({ location: '地铁站' })
-    expect(question.candidates.map(candidate => candidate.orderId)).toEqual(['ord-gold-2'])
+    expect(question.candidates.map(candidate => candidate.orderId)).toEqual([GOLD_RETURNED])
 
     await call(app.port, '/order-question/answer', {
       method: 'POST',
@@ -383,7 +469,7 @@ describe('search_orders', () => {
     const rejected: readonly [unknown, string][] = [
       [[], '参数必须是一个对象'],
       [{ customerId: gold.customerId }, '未知参数：customerId'],
-      [{ orderId: 'ord-gold-1' }, '未知参数：orderId'],
+      [{ orderId: GOLD_OPEN }, '未知参数：orderId'],
       [{ location: '' }, 'location 必须是非空字符串'],
       [{ location: 7 }, 'location 必须是非空字符串'],
       [{ rentedFrom: '昨天' }, 'ISO-8601'],
@@ -436,19 +522,19 @@ describe('the order Card routes', () => {
     await waitForQuestion(app.port, goldLogin.cookie)
 
     expect(bodyOf<OrderQuestion>(await call(app.port, '/order-question?callId=call-1', { cookie: silverLogin.cookie }))
-      .candidates.map(candidate => candidate.orderId)).toEqual(['ord-silver-1'])
+      .candidates.map(candidate => candidate.orderId)).toEqual([SILVER_OPEN])
     expect(bodyOf<OrderQuestion>(await call(app.port, '/order-question?callId=call-1', { cookie: goldLogin.cookie }))
-      .candidates.map(candidate => candidate.orderId)).toEqual(['ord-gold-2'])
+      .candidates.map(candidate => candidate.orderId)).toEqual([GOLD_RETURNED])
 
-    for (const [login_, orderId] of [[silverLogin, 'ord-silver-1'], [goldLogin, 'ord-gold-2']] as const) {
+    for (const [login_, orderId] of [[silverLogin, SILVER_OPEN], [goldLogin, GOLD_RETURNED]] as const) {
       expect((await call(app.port, '/order-question/answer', {
         method: 'POST',
         cookie: login_.cookie,
         body: { callId: 'call-1', orderId },
       })).status).toBe(200)
     }
-    expect(outcomeOrder(await silverCall)?.orderId).toBe('ord-silver-1')
-    expect(outcomeOrder(await goldCall)?.orderId).toBe('ord-gold-2')
+    expect(outcomeOrder(await silverCall)?.orderId).toBe(SILVER_OPEN)
+    expect(outcomeOrder(await goldCall)?.orderId).toBe(GOLD_RETURNED)
   })
 
   it('refuses the Card to nobody, and to another Customer', async () => {
@@ -468,17 +554,17 @@ describe('the order Card routes', () => {
     expect((await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie: goldLogin.cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-1' },
+      body: { callId: 'call-1', orderId: SILVER_OPEN },
     })).status).toBe(404)
 
     // The owner answers, proving the refused attempts left the question live.
     const answered = await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie: silverLogin.cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-1' },
+      body: { callId: 'call-1', orderId: SILVER_OPEN },
     })
     expect(answered.status).toBe(200)
-    expect(outcomeOrder(await running)?.orderId).toBe('ord-silver-1')
+    expect(outcomeOrder(await running)?.orderId).toBe(SILVER_OPEN)
   })
 
   it('refuses an Order the query did not return, a malformed body, and a second answer', async () => {
@@ -492,7 +578,7 @@ describe('the order Card routes', () => {
     const foreign = await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-1' },
+      body: { callId: 'call-1', orderId: SILVER_OPEN },
     })
     expect(foreign.status).toBe(400)
     expect(foreign.body).toEqual({ error: '这个订单不在本次查询结果中' })
@@ -503,14 +589,14 @@ describe('the order Card routes', () => {
     expect((await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-2' },
+      body: { callId: 'call-1', orderId: SILVER_RETURNED },
     })).status).toBe(200)
     await running
 
     const again = await call(app.port, '/order-question/answer', {
       method: 'POST',
       cookie,
-      body: { callId: 'call-1', orderId: 'ord-silver-2' },
+      body: { callId: 'call-1', orderId: SILVER_RETURNED },
     })
     expect(again.status).toBe(404)
   })

@@ -10,24 +10,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { DEMO_ORDERS } from '../plugins/store/index.js'
-import { call, disposeAll } from './support.js'
+import { MISSING_ORDER, call, disposeAll } from './support.js'
 import { boot, demoAccount, login, outcomeOrder, outcomeText, outcomeValue, waitForQuestion } from './composition.js'
 import type { Booted } from './composition.js'
 
 /** 铂金: a tier a refund is open to, with one Order of each status. */
 const PLATINUM = 'cust-platinum'
-const PLATINUM_RETURNED = 'ord-platinum-2'
-const PLATINUM_IN_PROGRESS = 'ord-platinum-1'
+const PLATINUM_RETURNED = '9a83ac26-7657-48c2-91b8-4d15baedd6e8'
+const PLATINUM_IN_PROGRESS = '9233d92c-3a2f-487e-8af6-e6556c0e478d'
 
 /** 黑金: the other tier a refund is open to. */
 const BLACK_GOLD = 'cust-black-gold'
-const BLACK_GOLD_RETURNED = 'ord-black-gold-2'
+const BLACK_GOLD_RETURNED = 'd62e2d37-0c5a-4c73-b007-cb4acd8bd9fc'
 
 /** Tiers a refund is not open to, each with an Order that is already 已归还. */
 const SILVER = 'cust-silver'
-const SILVER_RETURNED = 'ord-silver-2'
+const SILVER_IN_PROGRESS = 'cbb14662-4d88-4361-9710-9a4229c1c960'
+const SILVER_RETURNED = 'a5ca2d55-ff76-4f63-8b51-96f7a0df182c'
 const GOLD = 'cust-gold'
-const GOLD_RETURNED = 'ord-gold-2'
+const GOLD_RETURNED = '442b2a2c-b8f9-4b65-9c65-df4f3319d947'
 
 /** The instant a 人工还宝 validation reads {@link PLATINUM_IN_PROGRESS} inside its
  * window, so only the action the grant binds can be what refuses a refund. */
@@ -171,7 +172,7 @@ describe('the fixed rules for 退款', () => {
     // Customer is told, because that is what the rule reads first.
     const caller = await callerFor(app, 'silver')
 
-    expect(outcomeValue<Verdict>(await run(app, caller, 'validate_refund', { orderId: 'ord-silver-1' })))
+    expect(outcomeValue<Verdict>(await run(app, caller, 'validate_refund', { orderId: SILVER_IN_PROGRESS })))
       .toEqual({ verdict: 'denied', text: STILL_OUT })
     // And the tier refusal is what is left once the Order is back.
     expect(outcomeValue<Verdict>(await run(app, caller, 'validate_refund', { orderId: SILVER_RETURNED })))
@@ -402,9 +403,9 @@ describe('refund', () => {
     const caller = await callerFor(app, 'platinum')
 
     for (const name of NEW_TOOLS) {
-      const outcome = await run(app, caller, name, { orderId: 'ord-nobody' })
+      const outcome = await run(app, caller, name, { orderId: MISSING_ORDER })
       expect(outcome.isError).toBe(true)
-      expect(outcomeText(outcome)).toContain('ord-nobody')
+      expect(outcomeText(outcome)).toContain(MISSING_ORDER)
       expect(outcomeText(outcome)).toContain('不存在')
     }
   })
